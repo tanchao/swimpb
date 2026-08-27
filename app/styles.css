@@ -595,6 +595,278 @@ sup.flag {
   text-decoration: none;
 }
 
+/* Motivational standards -------------------------------------------------- */
+
+/* The ladder reads as ONE hue ramping in weight and fill, not six colors. The
+   lane colors already own hue in this table; a second hue system competing with
+   them would make the board harder to scan, not easier. */
+.lvl {
+  font-family: var(--display);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  vertical-align: 0.16em;
+  margin-left: 0.4em;
+  padding: 0.06em 0.3em;
+  border-radius: 2px;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.lvl-b {
+  color: var(--ink-3);
+}
+.lvl-bb {
+  color: var(--ink-2);
+}
+.lvl-a {
+  color: color-mix(in srgb, var(--accent) 72%, var(--ink-3));
+}
+.lvl-aa {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.lvl-aaa {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.lvl-aaaa {
+  background: var(--accent);
+  color: #04121b;
+}
+
+:root[data-theme="light"] .lvl-aaaa {
+  color: #fff;
+}
+
+/* Gap to the next rung — highlighted column only, so the number you are
+   reading is the one that tells you what is next. Always present in the primary
+   column (sometimes empty) to keep row heights even. */
+.gap {
+  display: block;
+  min-height: 1.05em;
+  margin-top: 0.15rem;
+  font-family: var(--display);
+  font-size: 0.68rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.gap .gap-lvl {
+  color: var(--ink-2);
+  font-weight: 600;
+  margin-right: 0.3em;
+}
+
+/* The delta is a number, so it is mono and tabular like every other number. */
+.gap .gap-d {
+  font-family: var(--mono);
+  font-size: 0.94em;
+  font-feature-settings: "tnum" 1;
+  letter-spacing: -0.01em;
+}
+
+.gap.top {
+  color: var(--accent);
+}
+
+/* The set the chips are measured against. */
+.std-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  margin: 1rem 0 0.35rem;
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+
+.std-label {
+  font-family: var(--display);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.seg-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font-family: var(--display);
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+  transition: color 0.16s var(--ease), background 0.16s var(--ease);
+}
+
+.seg-btn:hover:not(.on) {
+  color: var(--ink);
+  background: var(--panel-2);
+}
+
+.seg-btn.on {
+  background: var(--accent);
+  color: #04121b;
+  font-weight: 600;
+}
+
+:root[data-theme="light"] .seg-btn.on {
+  color: #fff;
+}
+
+.std-bar select {
+  appearance: none;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  color: var(--ink-2);
+  font-family: var(--display);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+}
+
+.std-edition {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  cursor: help;
+}
+
+.std-note {
+  color: var(--ink-3);
+}
+
+/* Focus list ------------------------------------------------------------- */
+
+/* Reads as a ranked panel, not as a table — it is prose about the numbers, so
+   it deliberately does NOT adopt the mono/tabular treatment of the board. Only
+   the evidence column is mono, because that part is numbers. */
+.focus {
+  margin-top: 1.8rem;
+  padding: 1.1rem 1.2rem 0.9rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  background: var(--panel);
+}
+
+.focus-title {
+  margin: 0 0 0.8rem;
+  font-family: var(--display);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.focus-course {
+  font-size: 0.76rem;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+
+.focus-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.1rem;
+}
+
+.focus-item {
+  display: grid;
+  grid-template-columns: 1.6rem 1fr auto;
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--rule);
+}
+
+.focus-item:first-child {
+  border-top: 0;
+}
+
+.focus-rank {
+  font-family: var(--display);
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--rule-hi);
+  text-align: right;
+}
+
+.focus-item:first-child .focus-rank {
+  color: var(--accent);
+}
+
+.focus-head {
+  margin: 0;
+  font-family: var(--body);
+  font-size: 0.92rem;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.focus-detail {
+  margin: 0.15rem 0 0;
+  font-size: 0.83rem;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.focus-evi {
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  font-feature-settings: "tnum" 1;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.focus-note,
+.focus-thin {
+  margin: 0.9rem 0 0;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+.focus-thin {
+  border-top: 0;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+@media (max-width: 34rem) {
+  .focus-item {
+    grid-template-columns: 1.4rem 1fr;
+  }
+  .focus-evi {
+    grid-column: 2;
+  }
+}
+
 /* Staggered reveal — one orchestrated load, not scattered micro-motion. */
 @media (prefers-reduced-motion: no-preference) {
   tbody tr {

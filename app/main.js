@@ -1,9 +1,11 @@
 // State and wiring. Owns the URL (so a swimmer is linkable/bookmarkable), the
 // cache calls, and event handling; delegates all markup to ui.js.
 
+import { advise } from "./advise.js";
 import { ApiError, bestTimes, getMember, officialUrl, searchSwimmers } from "./api.js";
 import * as cache from "./cache.js";
 import { COURSES } from "./convert.js";
+import { ageGroupFor, loadStandards } from "./standards.js";
 import * as ui from "./ui.js";
 
 const el = (id) => document.getElementById(id);
@@ -14,7 +16,24 @@ const state = {
   swimmer: null,
   groups: [],
   results: null,
+  // The motivational standards table, and which slice of it to measure against.
+  // Gender can't be derived — the public API has no such field — so it is set
+  // per swimmer and remembered.
+  standards: null,
+  gender: null,
+  ageGroupOverride: null,
 };
+
+/** The age group in force: an explicit override, else derived from the age. */
+function ageGroup() {
+  return state.ageGroupOverride ?? ageGroupFor(state.swimmer?.swimmerAge);
+}
+
+/** What ui.js needs to draw chips, or null when there's nothing to measure. */
+function standardsContext() {
+  if (!state.standards) return null;
+  return { data: state.standards, gender: state.gender, ageGroup: ageGroup() };
+}
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -31,10 +50,34 @@ function renderResults() {
   el("results").innerHTML = ui.swimmerList(state.results);
 }
 
+function renderStandards() {
+  el("standards").innerHTML = state.swimmer
+    ? ui.standardsBar({
+        gender: state.gender,
+        ageGroup: ageGroup(),
+        autoGroup: ageGroupFor(state.swimmer.swimmerAge),
+        age: state.swimmer.swimmerAge ?? null,
+        edition: state.standards?.edition ?? null,
+        ready: Boolean(state.standards),
+      })
+    : "";
+}
+
+function renderTimes() {
+  const std = standardsContext();
+  el("times").innerHTML = ui.bestTimesTable(state.groups, state.course, std);
+  // The ruler and the advice move together, so they re-render together.
+  el("advice").innerHTML = std
+    ? ui.advicePanel(advise(state.groups, std, state.course), state.course, state.standards?.edition)
+    : "";
+}
+
 function renderSwimmer(meta = {}) {
   if (!state.swimmer) {
     el("swimmer").innerHTML = "";
+    el("standards").innerHTML = "";
     el("times").innerHTML = "";
+    el("advice").innerHTML = "";
     return;
   }
   el("swimmer").innerHTML = ui.swimmerHeader(state.swimmer, {
@@ -42,7 +85,8 @@ function renderSwimmer(meta = {}) {
     officialUrl: officialUrl(state.swimmer.memberId),
     freshness: meta.freshness ?? "",
   });
-  el("times").innerHTML = ui.bestTimesTable(state.groups, state.course);
+  renderStandards();
+  renderTimes();
 }
 
 function status(msg, kind = "info") {
@@ -91,9 +135,24 @@ async function selectSwimmer(swimmer) {
   state.swimmer = swimmer;
   state.groups = [];
   state.results = null;
+  // Both are per swimmer: a family checks more than one, and they don't share a
+  // gender or an age group.
+  state.gender = cache.pref(`gender:${swimmer.memberId}`, null);
+  state.ageGroupOverride = cache.pref(`ageGroup:${swimmer.memberId}`, null);
   renderResults();
   renderPinned();
   cache.setEntry(`swimmer:${swimmer.memberId}`, swimmer);
+
+  // Fire and forget: the board renders without chips and gains them when the
+  // table arrives. A failure leaves the board exactly as it is today.
+  loadStandards().then((data) => {
+    if (!data || state.standards) return;
+    state.standards = data;
+    if (state.swimmer) {
+      renderStandards();
+      renderTimes();
+    }
+  });
 
   const url = new URL(location.href);
   url.searchParams.set("m", swimmer.memberId);
@@ -148,7 +207,25 @@ function setCourse(course) {
   cache.setPref("course", course);
   renderCourse();
   // Pure re-render — no refetch, because one call already gave us every course.
-  if (state.swimmer) el("times").innerHTML = ui.bestTimesTable(state.groups, state.course);
+  if (state.swimmer) renderTimes();
+}
+
+/**
+ * Changing the standards set is a re-render too: the times are unchanged, only
+ * the ruler moves.
+ */
+function setStandardsSet({ gender, ageGroupOverride }) {
+  if (!state.swimmer) return;
+  if (gender !== undefined) {
+    state.gender = gender;
+    cache.setPref(`gender:${state.swimmer.memberId}`, gender);
+  }
+  if (ageGroupOverride !== undefined) {
+    state.ageGroupOverride = ageGroupOverride;
+    cache.setPref(`ageGroup:${state.swimmer.memberId}`, ageGroupOverride);
+  }
+  renderStandards();
+  renderTimes();
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +245,17 @@ el("current-only").addEventListener("change", (e) => {
 el("course-toggle").addEventListener("click", (e) => {
   const btn = e.target.closest(".course-btn");
   if (btn) setCourse(btn.dataset.course);
+});
+
+el("standards").addEventListener("click", (e) => {
+  const btn = e.target.closest(".seg-btn");
+  if (btn) setStandardsSet({ gender: btn.dataset.gender });
+});
+
+el("standards").addEventListener("change", (e) => {
+  if (e.target.id !== "age-group") return;
+  // Empty value means "follow the swimmer's age" rather than a pinned group.
+  setStandardsSet({ ageGroupOverride: e.target.value || null });
 });
 
 // One delegated handler covers both the search results and the saved bar.

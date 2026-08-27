@@ -6,10 +6,12 @@
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import {
+  advicePanel,
   bestTimesTable,
   courseToggle,
   groupBestTimes,
   pinnedBar,
+  standardsBar,
   swimmerList,
 } from "../app/ui.js";
 
@@ -130,6 +132,175 @@ check("empty states", () => {
 
 check("course toggle marks exactly one active", () => {
   assert.equal((courseToggle("SCM").match(/course-btn on/g) ?? []).length, 1);
+});
+
+// --- motivational standards -------------------------------------------------
+// A synthetic ladder, so the assertions don't depend on which edition of the
+// real table happens to be checked in.
+
+const CUTS_50 = [2600, 2500, 2400, 2300, 2200, 2100]; // fixture's 50 FR SCY is 22.64r
+const STD_DATA = {
+  edition: "test",
+  levels: ["B", "BB", "A", "AA", "AAA", "AAAA"],
+  standards: {
+    girls: { "17-18": { SCY: { "50 FR": CUTS_50 }, LCM: { "50 FR": CUTS_50 } } },
+  },
+};
+const STD = { data: STD_DATA, gender: "girls", ageGroup: "17-18" };
+
+// One event, raced in yards only, so the meters columns must be conversions.
+const oneEvent = groupBestTimes([
+  { strokeName: "Freestyle", distance: 50, courseCode: "SCY", swimTime: "22.64" },
+]);
+
+check("no chips until a gender is chosen", () => {
+  // The public API has no gender field, so guessing would be both unreliable
+  // and wrong to do — the board simply shows no standards.
+  const html = bestTimesTable(oneEvent, "SCY", { data: STD_DATA, gender: null, ageGroup: "17-18" });
+  assert.ok(!html.includes('class="lvl'));
+  assert.ok(!html.includes('class="gap'));
+});
+
+check("no chips without standards data", () =>
+  assert.ok(!bestTimesTable(oneEvent, "SCY", null).includes('class="lvl')));
+
+check("an actual time gets the level it reached", () => {
+  const html = bestTimesTable(oneEvent, "SCY", STD);
+  // 22.64 beats AA (23.00) but not AAA (22.00).
+  assert.ok(html.includes(">AA</span>"), "expected an AA chip");
+  assert.equal((html.match(/class="lvl lvl-aa"/g) ?? []).length, 1);
+});
+
+check("a converted estimate never gets a chip", () => {
+  // Only a real swim can achieve a standard. LCM here is an estimate, and the
+  // synthetic table does define an LCM 50 FR cut, so a chip would appear if the
+  // rule were not enforced.
+  const html = bestTimesTable(oneEvent, "SCY", STD);
+  assert.equal((html.match(/class="t converted"/g) ?? []).length, 2, "expected 2 estimates");
+  assert.equal((html.match(/class="lvl /g) ?? []).length, 1, "only the real swim is chipped");
+});
+
+check("the gap to the next cut appears, in the primary column only", () => {
+  const html = bestTimesTable(oneEvent, "SCY", STD);
+  assert.ok(html.includes(">AAA</span>"), "next rung should be AAA");
+  assert.ok(html.includes("−0.64"), "22.64 is 0.64 off the 22.00 AAA cut");
+  // One gap element per row, and it sits in the highlighted column. Matched
+  // exactly, so the gap-lvl / gap-d spans inside it don't also count.
+  assert.equal((html.match(/class="gap(?:"| )/g) ?? []).length, 1);
+  const primaryCell = /<td class="c cell primary">([\s\S]*?)<\/td>/.exec(html);
+  assert.ok(primaryCell && primaryCell[1].includes('class="gap'), "gap must be in the primary cell");
+});
+
+check("the gap follows the selected course", () => {
+  // Selecting a course whose cell is an estimate leaves the slot empty rather
+  // than offering a target derived from a time that was never swum.
+  const html = bestTimesTable(oneEvent, "LCM", STD);
+  assert.ok(!html.includes("−0.64"), "an estimate must not carry a target");
+  assert.equal((html.match(/class="gap"><\/span>/g) ?? []).length, 1);
+});
+
+check("every primary cell reserves the gap line, so rows stay level", () => {
+  const groupsAll = groupBestTimes(fixture);
+  const html = bestTimesTable(groupsAll, "SCY", STD);
+  const rows = (html.match(/<tr class="ev-row"/g) ?? []).length;
+  assert.equal((html.match(/class="gap(?:"| )/g) ?? []).length, rows);
+});
+
+check("faster than the top rung reads AAAA with no target", () => {
+  const fast = groupBestTimes([
+    { strokeName: "Freestyle", distance: 50, courseCode: "SCY", swimTime: "20.00" },
+  ]);
+  const html = bestTimesTable(fast, "SCY", STD);
+  assert.ok(html.includes("lvl-aaaa"));
+  assert.ok(html.includes("AAAA ✓"));
+});
+
+check("standards bar is silent until the table has loaded", () =>
+  assert.equal(standardsBar({ gender: null, ageGroup: null, ready: false }), ""));
+
+check("standards bar asks for a gender and says why", () => {
+  const html = standardsBar({ gender: null, ageGroup: "13-14", autoGroup: "13-14", age: 13, edition: "x", ready: true });
+  assert.ok(html.includes("Girls") && html.includes("Boys"));
+  assert.ok(!html.includes("seg-btn on"), "nothing preselected");
+  assert.ok(/doesn.t say/.test(html), "should explain the API has no gender");
+});
+
+check("standards bar marks the chosen gender and offers the auto age group", () => {
+  const html = standardsBar({ gender: "boys", ageGroup: "13-14", autoGroup: "13-14", age: 14, edition: "2025-2028", ready: true });
+  assert.equal((html.match(/seg-btn on/g) ?? []).length, 1);
+  assert.ok(html.includes("Auto — 13-14"));
+  assert.ok(html.includes("2025-2028"));
+});
+
+check("standards bar explains an out-of-range age instead of going blank", () => {
+  const html = standardsBar({ gender: "girls", ageGroup: null, autoGroup: null, age: 29, edition: "x", ready: true });
+  assert.ok(html.includes("stop at 18"));
+  assert.ok(html.includes("29"));
+});
+
+check("standards bar escapes the edition string", () => {
+  const html = standardsBar({ gender: "girls", ageGroup: "13-14", autoGroup: "13-14", age: 13, edition: '<script>bad()</script>', ready: true });
+  assert.ok(!html.includes("<script>"));
+});
+
+// --- focus panel ------------------------------------------------------------
+
+check("focus panel is silent when there is no standards set", () => {
+  assert.equal(advicePanel({ ready: false, reason: "no-standards", findings: [] }, "SCY", "x"), "");
+  assert.equal(advicePanel(null, "SCY", "x"), "");
+});
+
+check("focus panel explains thin data instead of showing an empty box", () => {
+  const html = advicePanel({ ready: false, reason: "thin", have: 2, findings: [] }, "SCM", "x");
+  assert.ok(html.includes("Not enough swims"));
+  assert.ok(html.includes("Short Meters"), "should name the course in words");
+  assert.ok(html.includes("2 measurable"));
+});
+
+check("focus panel ranks findings and shows each one's evidence", () => {
+  const html = advicePanel(
+    {
+      ready: true,
+      findings: [
+        { kind: "quickest-win", headline: "Closest cut", detail: "d1", evidence: "−0.60, 0.2% off", weight: 9 },
+        { kind: "weakest-stroke", headline: "Breaststroke lags", detail: "d2", evidence: "1.4 standards behind", weight: 7 },
+      ],
+    },
+    "SCY",
+    "2024-2028",
+  );
+  assert.equal((html.match(/class="focus-item"/g) ?? []).length, 2);
+  assert.ok(/focus-rank">1</.test(html) && /focus-rank">2</.test(html), "items are numbered");
+  assert.ok(html.includes("−0.60, 0.2% off") && html.includes("1.4 standards behind"));
+  assert.ok(html.includes("2024-2028"), "should name the edition it judged against");
+});
+
+check("focus panel disclaims the things it is not", () => {
+  // It must never be mistaken for a power-point total, an IMX score or a rank —
+  // none of which are obtainable here.
+  const html = advicePanel(
+    { ready: true, findings: [{ kind: "k", headline: "h", detail: "d", evidence: "e", weight: 1 }] },
+    "SCY",
+    "2024-2028",
+  );
+  assert.ok(/not<\/strong> a power-point total/.test(html));
+  assert.ok(html.includes("IMX/IMR score"));
+  assert.ok(html.includes("rank"));
+});
+
+check("focus panel escapes hostile findings", () => {
+  const html = advicePanel(
+    {
+      ready: true,
+      findings: [
+        { kind: "<img src=x>", headline: "<script>bad()</script>", detail: '"><b>x', evidence: "<i>e", weight: 1 },
+      ],
+    },
+    "SCY",
+    "<script>y</script>",
+  );
+  assert.ok(!html.includes("<script>"));
+  assert.ok(!html.includes("<img"));
 });
 
 console.log(`\n${pass} passed, ${fails.length} failed`);
