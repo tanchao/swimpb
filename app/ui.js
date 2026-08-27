@@ -10,6 +10,15 @@ import {
   explain,
   mapDistance,
 } from "./convert.js";
+import {
+  AGE_GROUPS,
+  AGE_GROUP_LABEL,
+  GENDERS,
+  GENDER_LABEL,
+  cutsFor,
+  levelFor,
+  nextCut,
+} from "./standards.js";
 import { flagLabel, formatDelta, formatTime, parseTime } from "./time.js";
 
 const STROKE_ORDER = ["Freestyle", "Backstroke", "Breaststroke", "Butterfly", "Individual Medley"];
@@ -91,23 +100,79 @@ function cellFor(row, course) {
   return { kind: "none" };
 }
 
-function cellHtml(row, course, primary) {
+/**
+ * The six motivational cuts for one cell, or null when there is no standard to
+ * measure against — no gender chosen, an age past 18, or an event not in the
+ * published set.
+ */
+function cutsForCell(row, course, std) {
+  if (!std?.data || !std.gender || !std.ageGroup) return null;
+  return cutsFor(std.data, {
+    gender: std.gender,
+    ageGroup: std.ageGroup,
+    course,
+    distance: row.distance,
+    stroke: row.stroke,
+  });
+}
+
+/**
+ * The achieved-standard chip. Deliberately absent in two cases, which the gap
+ * line in the highlighted column disambiguates:
+ *   - no published standard for the event → nothing to say
+ *   - slower than B → say it as a target ("B −1.20"), not as a failing mark
+ */
+function chipHtml(hundredths, cuts, context) {
+  const got = levelFor(hundredths, cuts);
+  if (!got) return "";
+  return `<span class="lvl lvl-${got.level.toLowerCase()}" title="${esc(`${got.level} standard · ${context}`)}">${got.level}</span>`;
+}
+
+/**
+ * The next rung and how much has to come off. An empty span rather than nothing
+ * when there is no cut to chase: it reserves the same line in every primary
+ * cell, so switching course doesn't leave the column ragged.
+ */
+function gapHtml(hundredths, cuts) {
+  const next = cuts === null ? null : nextCut(hundredths, cuts);
+  if (!cuts) return `<span class="gap"></span>`;
+  if (!next) {
+    return `<span class="gap top" title="Fastest rung on the age-group ladder">AAAA ✓</span>`;
+  }
+  return `<span class="gap"><span class="gap-lvl">${next.level}</span><span class="gap-d">${formatDelta(next.gap)}</span></span>`;
+}
+
+function cellHtml(row, course, primary, std) {
   const cell = cellFor(row, course);
   const cls = `c cell${primary ? " primary" : ""}`;
+  const active = Boolean(std?.data && std.gender && std.ageGroup);
+  const cuts = active ? cutsForCell(row, course, std) : null;
+
+  // Reserve the gap line in every primary cell once standards are on, whatever
+  // the cell holds, so all rows keep the same height.
+  const slot = primary && active;
 
   if (cell.kind === "none") {
-    return `<td class="${cls} empty">·</td>`;
+    return `<td class="${cls} empty">·${slot ? '<span class="gap"></span>' : ""}</td>`;
   }
 
   if (cell.kind === "actual") {
     const flag = cell.flag
       ? `<sup class="flag" title="${esc(flagLabel(cell.flag))}">${esc(cell.flag)}</sup>`
       : "";
-    return `<td class="${cls}"><span class="t actual">${formatTime(cell.hundredths)}</span>${flag}</td>`;
+    // Only a real swim can achieve a standard, so chips are computed here and
+    // nowhere else.
+    const context = `${GENDER_LABEL[std?.gender] ?? ""} ${std?.ageGroup ?? ""} · ${row.distance} ${row.stroke} ${course}`;
+    const chip = chipHtml(cell.hundredths, cuts, context.replace(/\s+/g, " ").trim());
+    const gap = slot ? gapHtml(cell.hundredths, cuts) : "";
+    return `<td class="${cls}"><span class="t actual">${formatTime(cell.hundredths)}</span>${flag}${chip}${gap}</td>`;
   }
 
+  // A converted time is an estimate and is never a personal best, so it cannot
+  // have achieved a standard. No chip, and no target either — chasing a cut
+  // with an estimated time would be chasing a number that isn't real.
   return `<td class="${cls}">
-    <span class="t converted" title="${esc(explain(row.distance, row.stroke, cell.from, course))}"><span class="tilde">~</span>${formatTime(cell.hundredths)}</span>
+    <span class="t converted" title="${esc(explain(row.distance, row.stroke, cell.from, course))}"><span class="tilde">~</span>${formatTime(cell.hundredths)}</span>${slot ? '<span class="gap"></span>' : ""}
   </td>`;
 }
 
@@ -122,7 +187,7 @@ const COURSE_LEN = { SCY: "25 yd", SCM: "25 m", LCM: "50 m" };
  * band keeps the comparison legible and still answers "what is this in meters?"
  * at a glance.
  */
-export function bestTimesTable(groups, primaryCourse) {
+export function bestTimesTable(groups, primaryCourse, std = null) {
   if (!groups.length) {
     return `<p class="empty-state">No times on record for this swimmer.</p>`;
   }
@@ -149,7 +214,7 @@ export function bestTimesTable(groups, primaryCourse) {
           const alt = metric !== row.distance ? `<span class="alt">/ ${metric} m</span>` : "";
           return `<tr class="ev-row" style="--i:${i++}">
             <th scope="row" class="ev">${row.distance}${alt}</th>
-            ${COURSES.map((c) => cellHtml(row, c, c === primaryCourse)).join("")}
+            ${COURSES.map((c) => cellHtml(row, c, c === primaryCourse, std)).join("")}
           </tr>`;
         })
         .join("");
@@ -168,6 +233,51 @@ export function bestTimesTable(groups, primaryCourse) {
       <tbody>${body}</tbody>
     </table>
   </div>`;
+}
+
+/**
+ * The ranked focus list. Takes the result of advise() — this stays a pure
+ * renderer, so the rules live in advise.js and the state in main.js.
+ *
+ * Each item shows its own evidence on purpose: the point is a coach or parent
+ * can check the reasoning and disagree with it, rather than take it on faith.
+ */
+export function advicePanel(result, course, edition) {
+  if (!result || result.reason === "no-standards") return "";
+
+  if (!result.ready) {
+    return `<section class="focus">
+      <h3 class="focus-title">Focus</h3>
+      <p class="focus-thin">Not enough swims in ${esc(COURSE_LABEL[course] ?? course)} to say anything useful yet${
+        result.have ? ` — ${result.have} measurable so far` : ""
+      }. Switch course, or come back after another meet.</p>
+    </section>`;
+  }
+
+  const items = result.findings
+    .map(
+      (f, i) => `<li class="focus-item" data-kind="${esc(f.kind)}">
+        <span class="focus-rank">${i + 1}</span>
+        <div class="focus-body">
+          <p class="focus-head">${esc(f.headline)}</p>
+          <p class="focus-detail">${esc(f.detail)}</p>
+        </div>
+        <span class="focus-evi">${esc(f.evidence)}</span>
+      </li>`,
+    )
+    .join("");
+
+  return `<section class="focus">
+    <h3 class="focus-title">Focus <span class="focus-course">${esc(COURSE_LABEL[course] ?? course)}</span></h3>
+    <ol class="focus-list">${items}</ol>
+    <p class="focus-note">
+      Worked out from this swimmer’s own recorded swims against the
+      ${esc(edition ?? "")} age-group standards — real times only, never converted
+      estimates. This is <strong>not</strong> a power-point total, an IMX/IMR score
+      or a national rank: USA Swimming computes those on its own servers and does
+      not expose them here.
+    </p>
+  </section>`;
 }
 
 export function swimmerCard(s, { pinned = false, active = false } = {}) {
@@ -203,6 +313,56 @@ export function courseToggle(primary) {
     (c, i) =>
       `<button class="course-btn${c === primary ? " on" : ""}" data-course="${c}" title="${esc(COURSE_LONG[c])}">${COURSE_LABEL[c]}<kbd>${i + 1}</kbd></button>`,
   ).join("");
+}
+
+/**
+ * The control row above the board: which standards set the chips are measured
+ * against.
+ *
+ * It exists because the public API has no gender field — only `swimmerAge` — so
+ * the set cannot be fully derived. Gender is chosen once and remembered; the age
+ * group is derived from the age but stays overridable, which doubles as a way to
+ * see what the next age group up demands.
+ *
+ * @param {{gender:string|null, ageGroup:string|null, autoGroup:string|null,
+ *          age:number|null, edition:string|null, ready:boolean}} o
+ */
+export function standardsBar({ gender, ageGroup, autoGroup, age, edition, ready }) {
+  if (!ready) return "";
+
+  const seg = GENDERS.map(
+    (g) =>
+      `<button class="seg-btn${g === gender ? " on" : ""}" data-gender="${g}">${GENDER_LABEL[g]}</button>`,
+  ).join("");
+
+  const opts = [
+    `<option value=""${ageGroup === autoGroup ? " selected" : ""}>${
+      autoGroup ? `Auto — ${AGE_GROUP_LABEL[autoGroup]}` : "Choose age group"
+    }</option>`,
+    ...AGE_GROUPS.map(
+      (g) =>
+        `<option value="${g}"${g === ageGroup && ageGroup !== autoGroup ? " selected" : ""}>${AGE_GROUP_LABEL[g]}</option>`,
+    ),
+  ].join("");
+
+  // Say why the board has no chips, rather than leaving it looking broken.
+  let note = "";
+  if (!gender) {
+    note = "Pick Girls or Boys to show standards — the public API doesn’t say.";
+  } else if (!ageGroup) {
+    note =
+      age != null && age >= 19
+        ? `Motivational standards stop at 18, and this swimmer is ${age}. Choose an age group to compare anyway.`
+        : "Choose an age group to show standards.";
+  }
+
+  return `<div class="std-bar">
+    <span class="std-label">Standards</span>
+    <div class="seg" id="gender-toggle">${seg}</div>
+    <select id="age-group" aria-label="Age group">${opts}</select>
+    ${edition ? `<span class="std-edition" title="USA Swimming National Age Group Motivational Standards">${esc(edition)}</span>` : ""}
+    ${note ? `<span class="std-note">${esc(note)}</span>` : ""}
+  </div>`;
 }
 
 export function swimmerHeader(s, meta) {

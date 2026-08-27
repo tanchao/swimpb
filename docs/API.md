@@ -105,12 +105,34 @@ a different id space; passing one returns a different swimmer's swim.
 
 ```http
 GET /SearchFilter/GetLscs               → [{orgUnitId, lscCode, lscName}]
-GET /SearchFilter/GetAllTimeStandards   → [{timeStandardTypeId, timeStandardType, standardName, sortOrder}]
 GET /TimesSearch/AllTimes/SwimTime/{swimTimeId}
 ```
 
-`GetAllTimeStandards` returns only the standard *names* (B, BB, A, … "Slower Than
-B"), **not** the qualifying times. Motivational cut times are not available here.
+`GetMember/{memberId}` is public too, and returns `swimmerAge` — but **no gender
+field**. Verified 2026-08-25:
+
+```json
+{"memberId":"…","fullName":"…","clubName":"…","lscCode":"FL",
+ "swimmerAge":29,"shortName":"…","profilePicUrl":"…","isNcaa":1}
+```
+
+That is why the app asks which motivational standards set to use instead of
+deriving it.
+
+### GetAllTimeStandards — was public, now 403
+
+```http
+GET /SearchFilter/GetAllTimeStandards   → 403 as of 2026-08-25
+```
+
+On 2026-08-03 this returned `[{timeStandardTypeId, timeStandardType, standardName,
+sortOrder}]` — only the standard *names* (B, BB, A, … "Slower Than B"), never the
+qualifying times. It now 403s anonymously like the endpoints below.
+
+**No public endpoint serves motivational cut times.** Both this and
+`GetSwimmerTimeStandards` are closed, so the app ships the numbers itself,
+generated from USA Swimming's published PDF by `tools/build-standards.py`. See the
+README.
 
 `AllTimes/SwimTime/{swimTimeId}` is the rich per-swim record, when you have a
 valid id from elsewhere:
@@ -138,8 +160,21 @@ GET  /TimesSearch/GetSwimmerCourses/{memberId}
 GET  /TimesSearch/GetSwimmerMeets/{memberId}
 GET  /SearchFilter/GetSwimmerEvents/{memberId}
 GET  /SearchFilter/GetSwimmerTimeStandards/{memberId}
+GET  /SearchFilter/GetAllTimeStandards          ← newly closed, see above
 POST /TimesSearch/GetAllTimesForFilters
 ```
+
+These probes returned 404 rather than 403, i.e. they don't exist:
+`GetTimeStandards`, `GetMotivationalTimes`, `GetTimeStandardTimes`,
+`GetTimeStandardsForFilters`, `GetCompetitionCategories`, `GetGenders`.
+
+### Unresolved: POST search from a non-browser client
+
+On 2026-08-25 `POST /TimesSearch/GetMembersForFilters` returned **403 with an empty
+body** (via Varnish) from a plain Node client, on a fresh `Device-Id`, while
+`GET /GetMember` returned 200 in the same sequence. The likely cause is edge
+filtering on a non-browser client rather than an API change, but this was not
+confirmed. **If search breaks in the browser, start here.**
 
 They need a logged-in session (`Usas-Session-Id` from the
 `dhy-prod.usaswimming.org/bff/userinfo` cookie flow).
