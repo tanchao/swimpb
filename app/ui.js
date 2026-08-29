@@ -308,6 +308,50 @@ export function pinnedBar(list, activeId) {
   </div>`;
 }
 
+/**
+ * Sign-in row.
+ *
+ * USA Swimming closed anonymous search and best-times on 2026-08-28, and a
+ * browser-only app can't complete the login flow itself — the session is an
+ * HttpOnly cookie on their domain and the login endpoints refuse a
+ * cross-origin preflight. But times-api accepts the session as headers from any
+ * origin, so the user pastes their own in.
+ *
+ * Collapsed by default so it stays out of the way, and opened automatically the
+ * moment a request comes back needing it.
+ */
+export function sessionBar({ signedIn, needsSession, error }) {
+  if (signedIn) {
+    return `<div class="signin on">
+      <span class="signin-dot" aria-hidden="true"></span>
+      <span>Signed in to USA Swimming — search and best times available for this tab.</span>
+      <button id="session-clear" class="ghost">Sign out</button>
+    </div>`;
+  }
+
+  return `<details class="signin"${needsSession ? " open" : ""}>
+    <summary>Sign in to USA Swimming${needsSession ? " — required" : ""}</summary>
+    <p class="signin-why">
+      Searching and loading best times now need a signed-in session. This page can’t
+      log in for you: the session is a cookie on <code>usaswimming.org</code> and their
+      login endpoints refuse cross-origin requests. Paste your own instead — it is kept
+      in this tab only, never written to disk, and is gone when the tab closes.
+    </p>
+    <ol class="signin-steps">
+      <li>Sign in at <a href="https://data.usaswimming.org" target="_blank" rel="noopener">data.usaswimming.org ↗</a></li>
+      <li>Open any swimmer’s best-times page</li>
+      <li>DevTools → Network → right-click a <code>times-api</code> request → Copy → Copy as cURL</li>
+      <li>Paste it below</li>
+    </ol>
+    <form class="signin-form" id="session-form">
+      <input id="session-paste" type="password" autocomplete="off" spellcheck="false"
+             placeholder="Paste the copied cURL here" aria-label="Pasted session" />
+      <button type="submit">Use session</button>
+    </form>
+    ${error ? `<p class="signin-err">${esc(error)}</p>` : ""}
+  </details>`;
+}
+
 export function courseToggle(primary) {
   return COURSES.map(
     (c, i) =>

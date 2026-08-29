@@ -2,7 +2,16 @@
 // cache calls, and event handling; delegates all markup to ui.js.
 
 import { advise } from "./advise.js";
-import { ApiError, bestTimes, getMember, officialUrl, searchSwimmers } from "./api.js";
+import {
+  ApiError,
+  bestTimes,
+  clearSession,
+  getMember,
+  officialUrl,
+  searchSwimmers,
+  session,
+  setSession,
+} from "./api.js";
 import * as cache from "./cache.js";
 import { COURSES } from "./convert.js";
 import { ageGroupFor, loadStandards } from "./standards.js";
@@ -22,6 +31,9 @@ const state = {
   standards: null,
   gender: null,
   ageGroupOverride: null,
+  // Set when a request comes back 403, so the sign-in row opens itself.
+  needsSession: false,
+  sessionError: "",
 };
 
 /** The age group in force: an explicit override, else derived from the age. */
@@ -40,6 +52,24 @@ function standardsContext() {
 
 function renderCourse() {
   el("course-toggle").innerHTML = ui.courseToggle(state.course);
+}
+
+function renderSession() {
+  el("session").innerHTML = ui.sessionBar({
+    signedIn: Boolean(session()),
+    needsSession: state.needsSession,
+    error: state.sessionError,
+  });
+}
+
+/** A 403 is an instruction, not a failure: open the sign-in row and say why. */
+function noteApiError(err, fallback) {
+  const needs = err instanceof ApiError && err.needsSession;
+  if (needs) {
+    state.needsSession = true;
+    renderSession();
+  }
+  status(err instanceof ApiError ? err.message : fallback, "error");
 }
 
 function renderPinned() {
@@ -127,7 +157,7 @@ async function doSearch(name) {
     // A single unambiguous match is almost always the one you meant.
     if (list.length === 1) selectSwimmer(list[0]);
   } catch (err) {
-    status(err instanceof ApiError ? err.message : "Search failed.", "error");
+    noteApiError(err, "Search failed.");
   }
 }
 
@@ -196,7 +226,7 @@ async function selectSwimmer(swimmer) {
       renderSwimmer({ freshness: "Offline — showing the last saved copy." });
       status("");
     } else {
-      status(err instanceof ApiError ? err.message : "Could not load times.", "error");
+      noteApiError(err, "Could not load times.");
     }
   }
 }
@@ -246,6 +276,43 @@ el("course-toggle").addEventListener("click", (e) => {
   const btn = e.target.closest(".course-btn");
   if (btn) setCourse(btn.dataset.course);
 });
+
+el("session").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const field = el("session-paste");
+  if (!setSession(field.value)) {
+    state.sessionError =
+      "Couldn’t find a session in that. Copy a times-api request as cURL while signed in, or paste the Usas-Session-Id and Usas-Sub-Id values.";
+    renderSession();
+    return;
+  }
+  // Never leave the credential sitting in the DOM.
+  field.value = "";
+  state.needsSession = false;
+  state.sessionError = "";
+  renderSession();
+  status("Signed in. Retrying…");
+  retryPending();
+});
+
+el("session").addEventListener("click", (e) => {
+  if (!e.target.closest("#session-clear")) return;
+  clearSession();
+  state.needsSession = false;
+  state.sessionError = "";
+  renderSession();
+});
+
+/** After signing in, pick up whatever the user was denied. */
+function retryPending() {
+  if (state.swimmer) {
+    selectSwimmer(state.swimmer);
+  } else if (el("q").value.trim()) {
+    doSearch(el("q").value);
+  } else {
+    status("");
+  }
+}
 
 el("standards").addEventListener("click", (e) => {
   const btn = e.target.closest(".seg-btn");
@@ -305,6 +372,7 @@ function boot() {
   document.documentElement.dataset.theme = cache.pref("theme", "dark");
   el("current-only").checked = state.currentOnly;
   renderCourse();
+  renderSession();
   renderPinned();
 
   // Deep link wins; otherwise fall back to the most recently saved swimmer so

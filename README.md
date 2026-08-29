@@ -22,19 +22,49 @@ opens straight onto him.
 - **/** focuses the search box
 - `?m=<memberId>` deep-links a swimmer
 
-Tests: `for t in convert ui standards advise; do node tests/$t.test.mjs; done`
-(113 checks, no deps)
+Tests: `for t in convert api ui standards advise; do node tests/$t.test.mjs; done`
+(131 checks, no deps)
 
 ## How it works
 
-Everything runs in the browser. On search it calls USA Swimming's public Data
-Hub API directly — the same API `data.usaswimming.org` uses — and caches the
-result in `localStorage`. There is no server, no API key, and no proxy.
+Everything runs in the browser. It calls USA Swimming's Data Hub API directly —
+the same API `data.usaswimming.org` uses — and caches the result in
+`localStorage`. There is still no server and no proxy.
 
 The reason that's possible: `times-api.usaswimming.org` responds with
 `access-control-allow-origin: *` and echoes back whatever headers the preflight
-asks for. See `docs/API.md` for the verified contract and the endpoints that
-are *not* public.
+asks for. See `docs/API.md` for the verified contract.
+
+## Signing in
+
+**Changed 2026-08-28.** USA Swimming closed anonymous access to swimmer search
+and best times — both now return 403, having worked three weeks earlier.
+`GetMember` and `GetLscs` still answer. This wasn't a block or a throttle:
+back-to-back requests gave 403 for best-times and 200 for `GetMember`, both
+reaching the origin.
+
+So the app now takes a session, and you paste your own:
+
+1. Sign in at `data.usaswimming.org`
+2. Open any swimmer's best-times page
+3. DevTools → Network → right-click a `times-api` request → **Copy as cURL**
+4. Paste it into the sign-in row
+
+It pulls `Usas-Session-Id` and `Usas-Sub-Id` out of the paste and derives the
+`rate-key` header itself. Kept in **`sessionStorage`** — one tab, never on disk,
+gone when the tab closes. A session id grants access to your account's view of
+the data, so it doesn't get treated like a preference.
+
+**The page cannot log in for you, and no amount of code changes that.** The
+session starts as an HttpOnly cookie on `.usaswimming.org`, and both USA
+Swimming auth endpoints refuse a cross-origin preflight outright — 400, no CORS
+headers. That would need a backend proxy. What *does* work is header-based auth,
+because `times-api` allows `usas-session-id`, `usas-sub-id` and `rate-key` from
+any origin.
+
+Everything not behind the API keeps working without a session: any swimmer
+already cached, plus all of the motivational standards and the focus panel,
+which are computed locally.
 
 One call, `GetBestTimesForMember`, returns the swimmer's bests in all three
 courses at once. So the course switch is a re-render, not a refetch — it's
@@ -164,7 +194,7 @@ must not be italicised.
 
 ```
 index.html                      markup + the legend
-app/api.js                      times-api client (headers, timeouts, error mapping)
+app/api.js                      times-api client (headers, session, rate-key, errors)
 app/cache.js                    localStorage + sessionStorage, TTL, stale-while-revalidate
 app/time.js                     time parsing / formatting
 app/convert.js                  SCY ↔ SCM ↔ LCM conversion and event mapping
@@ -186,6 +216,9 @@ docs/API.md                     verified API contract
 - Search matches current members by default. Uncheck the box for swimmers
   without a current registration.
 - Cross-check anything surprising against the **Official ↗** link.
-- This depends on an API USA Swimming can change without notice. If everything
-  breaks at once, re-derive the contract from the SPA bundle the way
-  `docs/API.md` describes.
+- This depends on an API USA Swimming can change without notice — and they did,
+  on 2026-08-28. If everything breaks at once, re-derive the contract from the
+  SPA bundle the way `docs/API.md` describes; the bundle hash changes on every
+  deploy, so start from the `modulepreload` link on the home page.
+- A session expires. When it does you get "that session is no longer valid" and
+  paste a fresh one.

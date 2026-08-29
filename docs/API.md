@@ -49,7 +49,12 @@ Responses sit behind Fastly/Varnish, so repeat reads are edge-cached.
 
 ## Public endpoints
 
-### Swimmer search
+> **Changed 2026-08-28.** Swimmer search and best times are **no longer
+> anonymous** — both now return 403. They worked on 2026-08-03. They still work
+> with a signed-in session; see *Session* below. `GetMember` and `GetLscs` remain
+> open.
+
+### Swimmer search — now needs a session
 
 ```http
 POST /TimesSearch/GetMembersForFilters
@@ -168,13 +173,83 @@ These probes returned 404 rather than 403, i.e. they don't exist:
 `GetTimeStandards`, `GetMotivationalTimes`, `GetTimeStandardTimes`,
 `GetTimeStandardsForFilters`, `GetCompetitionCategories`, `GetGenders`.
 
-### Unresolved: POST search from a non-browser client
+### Resolved: the 403s are authorization, not client filtering
 
-On 2026-08-25 `POST /TimesSearch/GetMembersForFilters` returned **403 with an empty
-body** (via Varnish) from a plain Node client, on a fresh `Device-Id`, while
-`GET /GetMember` returned 200 in the same sequence. The likely cause is edge
-filtering on a non-browser client rather than an API change, but this was not
-confirmed. **If search breaks in the browser, start here.**
+On 2026-08-25 `POST /TimesSearch/GetMembersForFilters` returned 403 from a Node
+client and the cause was open — possibly edge filtering on a non-browser client.
+**Settled on 2026-08-28: it is per-endpoint authorization.** The same 403 appears
+in a real browser, and back-to-back requests on one connection gave
+
+```
+403  GET /TimesSearch/GetBestTimesForMember/<id>    x-cache=MISS
+200  GET /TimesSearch/GetMember/<id>                x-cache=MISS
+```
+
+Both reached the origin. A throttle or an IP block would have hit both.
+
+---
+
+## Session
+
+`times-api` accepts a session in **headers**, with no cookie:
+
+```
+Usas-Sub-Id:      <the sub claim, a UUID>   (not "Anonymous")
+Usas-Session-Id:  <32 hex characters>
+rate-key:         <derived, see below>
+```
+
+Verified 2026-08-28: this turns 403 into 200 on both closed endpoints, sending
+no cookie, no `Origin` and no `Sec-*`. Responses then carry `User-Logged-In:
+true`. The best-times payload shape is unchanged.
+
+### rate-key
+
+HMAC-SHA256 of a 10-second time bucket, keyed by the session id, prefixed with
+that bucket divided by the seconds elapsed since UTC midnight:
+
+```js
+const bucket = Math.floor(Date.now() / 10_000).toString();
+const hex    = hmacSha256(key = sessionId, message = bucket);   // hex digest
+const today  = Math.floor((Date.now() - utcMidnight) / 1000) || 1;
+const key    = `${Math.floor(Number(bucket) / today)}.${hex}`;
+```
+
+Ported in `app/api.js` and checked against an independent HMAC in
+`tests/api.test.mjs`. Note a request carrying a correctly derived key is
+accepted — that does **not** prove the server rejects a wrong one.
+
+### Why the app can't sign in by itself
+
+The session originates as an HttpOnly cookie on `.usaswimming.org`, which the
+official app reads with `fetch("…/bff/userinfo", {credentials:"include"})`. A
+page on another origin cannot: both auth endpoints refuse the preflight
+outright, returning **400 with no CORS headers at all**.
+
+```
+OPTIONS https://dhy-prod.usaswimming.org/bff/userinfo                    → 400, no CORS
+OPTIONS https://security-api.usaswimming.org/security/auth/GetDataHub…   → 400, no CORS
+```
+
+No client-side code gets past that; it would need a backend proxy. So the user
+pastes their own session in, which works because `times-api` itself is open:
+
+```
+OPTIONS https://times-api.usaswimming.org/swims/TimesSearch/GetBestTimesForMember/<id>
+  Origin: http://localhost:8787
+→ 200
+  access-control-allow-origin:  *
+  access-control-allow-headers: appname,device-id,rate-key,usas-session-id,usas-sub-id
+```
+
+Those are exactly the headers required, permitted from any origin.
+
+### Where the SPA keeps it
+
+Cookies `usasauth`, `usasauthrt`, `usasauthed`, `usasauthu` on domain
+`.usaswimming.org`, `sameSite=lax`. The device id moved to a real browser
+fingerprint (canvas/audio) persisted at `localStorage.deviceId`, but the server
+still only checks the *shape*, so the generator in `app/api.js` remains valid.
 
 They need a logged-in session (`Usas-Session-Id` from the
 `dhy-prod.usaswimming.org/bff/userinfo` cookie flow).

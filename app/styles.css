@@ -754,6 +754,129 @@ sup.flag {
   color: var(--ink-3);
 }
 
+/* Sign-in ---------------------------------------------------------------- */
+
+/* Deliberately quiet when collapsed: it is scaffolding around a limitation
+   USA Swimming imposed, not a feature, so it should not compete with the board. */
+.signin {
+  margin: 0.9rem 0 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  background: var(--panel);
+  font-size: 0.82rem;
+  color: var(--ink-2);
+}
+
+.signin > summary {
+  padding: 0.55rem 0.8rem;
+  cursor: pointer;
+  font-family: var(--display);
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.signin > summary:hover {
+  color: var(--ink);
+}
+
+.signin[open] > summary {
+  border-bottom: 1px solid var(--rule);
+  color: var(--accent);
+}
+
+.signin-why {
+  margin: 0.8rem 0.9rem 0;
+  line-height: 1.55;
+  color: var(--ink-3);
+}
+
+.signin-steps {
+  margin: 0.6rem 0.9rem 0;
+  padding-left: 1.2rem;
+  line-height: 1.7;
+  color: var(--ink-3);
+}
+
+.signin code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  color: var(--ink-2);
+}
+
+.signin-form {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.85rem 0.9rem 0.9rem;
+}
+
+.signin-form input {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  padding: 0.45rem 0.6rem;
+}
+
+.signin-form input:focus {
+  outline: 0;
+  border-color: var(--accent);
+  box-shadow: var(--glow);
+}
+
+.signin-form button {
+  appearance: none;
+  border: 0;
+  border-radius: var(--r);
+  background: var(--accent);
+  color: #04121b;
+  font-family: var(--display);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.45rem 0.9rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+:root[data-theme="light"] .signin-form button {
+  color: #fff;
+}
+
+.signin-err {
+  margin: 0 0.9rem 0.9rem;
+  color: var(--fl);
+  line-height: 1.5;
+}
+
+/* Signed in: one line, then get out of the way. */
+.signin.on {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.8rem;
+}
+
+.signin-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--bk);
+  flex: none;
+}
+
+.signin.on button {
+  margin-left: auto;
+}
+
 /* Focus list ------------------------------------------------------------- */
 
 /* Reads as a ranked panel, not as a table — it is prose about the numbers, so

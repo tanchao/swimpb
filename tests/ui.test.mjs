@@ -9,6 +9,7 @@ import {
   advicePanel,
   bestTimesTable,
   courseToggle,
+  sessionBar,
   groupBestTimes,
   pinnedBar,
   standardsBar,
@@ -301,6 +302,42 @@ check("focus panel escapes hostile findings", () => {
   );
   assert.ok(!html.includes("<script>"));
   assert.ok(!html.includes("<img"));
+});
+
+// --- sign-in row ------------------------------------------------------------
+
+check("signed in collapses to one line with a way out", () => {
+  const html = sessionBar({ signedIn: true });
+  assert.ok(html.includes("Signed in to USA Swimming"));
+  assert.ok(html.includes('id="session-clear"'), "must offer sign-out");
+  assert.ok(!html.includes("session-paste"), "no paste field once signed in");
+});
+
+check("signed out stays collapsed until something needs it", () => {
+  const quiet = sessionBar({ signedIn: false, needsSession: false });
+  assert.ok(quiet.startsWith("<details class=\"signin\">"), "should not be open");
+  const asked = sessionBar({ signedIn: false, needsSession: true });
+  assert.ok(asked.includes("<details class=\"signin\" open>"), "should open on demand");
+  assert.ok(asked.includes("required"));
+});
+
+check("the paste field is masked, since it holds a credential", () => {
+  const html = sessionBar({ signedIn: false, needsSession: true });
+  assert.match(html, /id="session-paste"[^>]*type="password"/);
+  assert.match(html, /autocomplete="off"/);
+});
+
+check("it explains why the page cannot log in for you", () => {
+  const html = sessionBar({ signedIn: false, needsSession: true });
+  assert.ok(/can’t\s+log in for you/.test(html));
+  assert.ok(html.includes("never written to disk"));
+  assert.ok(html.includes("Copy as cURL"), "should name the exact devtools action");
+});
+
+check("a parse failure is shown and escaped", () => {
+  const html = sessionBar({ signedIn: false, error: "<script>bad()</script> nope" });
+  assert.ok(html.includes("signin-err"));
+  assert.ok(!html.includes("<script>"));
 });
 
 console.log(`\n${pass} passed, ${fails.length} failed`);

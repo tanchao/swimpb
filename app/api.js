@@ -32,21 +32,150 @@ function deviceId() {
   return id;
 }
 
+// ---------------------------------------------------------------------------
+// Session
+//
+// On 2026-08-28 USA Swimming closed the two endpoints this app is built on —
+// GetMembersForFilters and GetBestTimesForMember both return 403 to anonymous
+// callers, having worked on 2026-08-03. GetMember and GetLscs still answer, so
+// it is per-endpoint authorization, not a block: verified with back-to-back
+// requests that returned 403 and 200 respectively, both x-cache MISS.
+//
+// A browser-only app CANNOT sign in by itself. The session is an HttpOnly
+// cookie on .usaswimming.org, read by the official app with
+// fetch("…/bff/userinfo", {credentials:"include"}), and both that endpoint and
+// security-api reject a cross-origin preflight outright (400, no CORS headers).
+// No client-side code gets past that.
+//
+// What does work: times-api takes the session in HEADERS, not a cookie, and
+// allows them from any origin —
+//   access-control-allow-origin:  *
+//   access-control-allow-headers: appname,device-id,rate-key,usas-session-id,usas-sub-id
+// So the user pastes their own session in and we send it as headers. Verified
+// 403 → 200 on both closed endpoints with no cookie, no Origin and no Sec-*.
+//
+// It is kept in sessionStorage, never localStorage: a session id grants access
+// to the account's view of the data, so it dies with the tab rather than
+// sitting on disk.
+
+const SESSION_KEY = "swimpb:session";
+
+/** @returns {{sessionId:string, subId:string}|null} */
+export function session() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    const s = raw ? JSON.parse(raw) : null;
+    return s?.sessionId && s?.subId ? s : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearSession() {
+  try {
+    sessionStorage.removeItem(SESSION_KEY);
+  } catch {
+    // Nothing to do — an unwritable store just means no session.
+  }
+}
+
+/**
+ * Pull a session out of whatever the user pasted.
+ *
+ * The expected input is DevTools "Copy as cURL" for any times-api request,
+ * because that is one copy action and carries both values. Two bare tokens work
+ * too: the session id is 32 hex characters and the sub id is a UUID, so they
+ * are told apart by shape rather than by order.
+ *
+ * @returns {{sessionId:string, subId:string}|null}
+ */
+export function parseSession(text) {
+  if (typeof text !== "string" || !text.trim()) return null;
+
+  const headers = {};
+  for (const m of text.matchAll(/-H\s+(['"])([^:'"]+):\s*([\s\S]*?)\1/g)) {
+    headers[m[2].trim().toLowerCase()] = m[3].trim();
+  }
+  let sessionId = headers["usas-session-id"];
+  let subId = headers["usas-sub-id"];
+
+  // Fall back to shape: a plain paste of the two values, in either order.
+  if (!sessionId) sessionId = text.match(/\b[0-9A-Fa-f]{32}\b/)?.[0];
+  if (!subId) {
+    subId = text.match(/\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/)?.[0];
+  }
+
+  if (!sessionId || !subId || subId.toLowerCase() === "anonymous") return null;
+  return { sessionId, subId };
+}
+
+/** Store a pasted session. @returns {boolean} whether it parsed */
+export function setSession(text) {
+  const parsed = parseSession(text);
+  if (!parsed) return false;
+  try {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(parsed));
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * The `rate-key` header the official app sends alongside a session.
+ *
+ * A faithful port of its derivation: HMAC-SHA256 of a 10-second time bucket,
+ * keyed by the session id, prefixed with that bucket divided by the seconds
+ * elapsed since UTC midnight. Requires a secure context for crypto.subtle;
+ * http://localhost counts as one.
+ *
+ * Whether the server actually validates this is unknown — a request carrying a
+ * freshly derived key is accepted, which does not prove a wrong one is refused.
+ * Sending the correct value is right either way.
+ */
+export async function rateKey(sessionId) {
+  const bucket = Math.floor(Date.now() / 10_000).toString();
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(sessionId),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(bucket));
+  const hex = [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+  const now = Date.now();
+  const midnight = new Date(now);
+  midnight.setUTCHours(0, 0, 0, 0);
+  const secondsToday = Math.floor((now - midnight.getTime()) / 1000) || 1;
+
+  return `${Math.floor(Number(bucket) / secondsToday)}.${hex}`;
+}
+
 export class ApiError extends Error {
-  constructor(message, status) {
+  constructor(message, status, { needsSession = false } = {}) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    // The UI prompts for a paste instead of showing a bare status code.
+    this.needsSession = needsSession;
   }
 }
 
 async function request(path, body) {
+  const active = session();
   const headers = {
     "Content-Type": "application/json",
     AppName: "DataHub",
     "Device-Id": deviceId(),
-    "Usas-Sub-Id": "Anonymous",
+    "Usas-Sub-Id": active ? active.subId : "Anonymous",
   };
+  if (active) {
+    headers["Usas-Session-Id"] = active.sessionId;
+    headers["rate-key"] = await rateKey(active.sessionId);
+  }
 
   let res;
   try {
@@ -68,6 +197,19 @@ async function request(path, body) {
   }
 
   if (res.status === 404) return null; // "no records" — a normal empty result
+
+  // 403 means "sign in", not "something went wrong". Say which of the two it is
+  // rather than surfacing a status code the reader has to interpret.
+  if (res.status === 403) {
+    throw new ApiError(
+      active
+        ? "That USA Swimming session is no longer valid. Sign in again and paste a fresh one."
+        : "USA Swimming now requires a sign-in for this. Paste a session to continue.",
+      403,
+      { needsSession: true },
+    );
+  }
+
   if (!res.ok) {
     throw new ApiError(`USA Swimming returned ${res.status}.`, res.status);
   }
