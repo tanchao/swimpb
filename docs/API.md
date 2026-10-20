@@ -10,9 +10,11 @@ on **2026-10-19** after USA Swimming moved the SPA behind a same-origin BFF at
 https://data.usaswimming.org/api/times/swims
 ```
 
-Proxied locally by `serve.py` at `/api/times/swims` because `data.usaswimming.org`
-rejects cross-origin requests (`HTTP 400 "The origin 'http://localhost:8787' is not allowed."`)
-and browsers forbid setting a `Cookie` header on `fetch`.
+Proxied at `/api/times/swims` because `data.usaswimming.org` rejects cross-origin
+requests (`HTTP 400 "The origin 'http://localhost:8787' is not allowed."`) and
+browsers forbid setting a `Cookie` header on `fetch`. Locally that proxy is
+`serve.py`. The hosted site uses `functions/`, which forwards the caller's
+`X-Bff-Session` and does not store it.
 
 ### Required headers and cookie
 

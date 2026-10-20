@@ -5,7 +5,8 @@
 // https://data.usaswimming.org/api/times/swims authenticated by an HttpOnly
 // `bff_auth_session` cookie. Because data.usaswimming.org rejects cross-origin
 // requests with HTTP 400 and browsers forbid setting a `Cookie` header on fetch,
-// requests go through the local `serve.py` proxy at `/api/times/swims`.
+// requests go through `/api/times/swims`. Locally that is `serve.py`. On
+// Cloudflare Pages it is `functions/`, which stores no session of its own.
 
 const BASE = "/api/times/swims";
 const TIMEOUT_MS = 20_000;
@@ -128,11 +129,11 @@ export async function loginWithCredentials(username, password) {
 export function parseSession(text) {
   if (typeof text !== "string" || !text.trim()) return null;
 
-  const named = text.match(/(?:^|[\s;'"=])bff_auth_session=([A-Za-z0-9_\-~.%+=]{20,})/);
+  const named = text.match(/(?:^|[\s;'"=])bff_auth_session=([A-Za-z0-9_\-~.%+=/]{20,})/);
   if (named) return { bffSession: named[1] };
 
   const trimmed = text.trim();
-  if (/^CfDJ8[A-Za-z0-9_-]{20,}$/.test(trimmed)) {
+  if (/^CfDJ8[A-Za-z0-9_\-~.%+=/]{20,}$/.test(trimmed)) {
     return { bffSession: trimmed };
   }
 
@@ -218,6 +219,9 @@ async function request(path, body) {
   if (!res.ok) {
     throw new ApiError(`USA Swimming returned ${res.status}.`, res.status);
   }
+  // The hosted proxy returns a replacement cookie only to this browser.
+  const rotated = res.headers.get("X-Bff-Session");
+  if (rotated) setSession(`bff_auth_session=${rotated}`);
   return res.json();
 }
 

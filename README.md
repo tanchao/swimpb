@@ -1,7 +1,7 @@
 # SwimPB
 
 Type a swimmer's name, get every personal best, switch between yards and meters
-with one click. Personal tool, no backend, no build step.
+with one click. Personal tool. Locally there is no build step.
 
 ```
 cd ~/workspace/supertan/swimpb
@@ -19,7 +19,7 @@ opens straight onto him.
 - **/** focuses the search box
 - `?m=<memberId>` deep-links a swimmer
 
-Tests: `for t in convert api ui standards regional advise; do node tests/$t.test.mjs; done`
+Tests: `for t in convert api ui standards regional advise upstream; do node tests/$t.test.mjs; done`
 
 ## How it works
 
@@ -28,8 +28,9 @@ USA Swimming moved its frontend off `times-api.usaswimming.org` and behind a
 same-origin BFF at `https://data.usaswimming.org/api/times/swims` authenticated
 by an `HttpOnly` `bff_auth_session` cookie, rejecting cross-origin requests with
 HTTP 400. `serve.py` is a tiny stdlib server that serves the static files and
-forwards `/api/*/swims/*` upstream with your `bff_auth_session` cookie. See
-`docs/API.md` for the verified contract.
+forwards `/api/*/swims/*` upstream with your `bff_auth_session` cookie. The
+hosted site uses the Pages Function in `functions/` for the same forwarding.
+See `docs/API.md` for the verified contract.
 
 ## Signing in
 
@@ -37,14 +38,15 @@ Every Data Hub endpoint now requires a signed-in session (anonymous requests
 return 401). Sign in directly on the page or paste a session cookie:
 
 1. Open the **Sign in to USA Swimming** row and enter your `data.usaswimming.org`
-   username and password (`serve.py` completes the OIDC PKCE handshake, saves the
-   resulting `bff_auth_session` cookie to `.bff_session` with `0600` permissions,
-   and discards the password immediately).
+   username and password. Local `serve.py` completes the OIDC PKCE handshake,
+   saves the resulting `bff_auth_session` cookie to `.bff_session` with `0600`
+   permissions, and discards the password immediately. The hosted function
+   returns that cookie only to the browser that signed in and saves nothing.
 2. Or expand **Or paste a copied cURL / session cookie** and paste a copied
    `/api/times/swims` cURL command from DevTools.
-3. Optional: set `SWIMPB_USER` and `SWIMPB_PASS` in a local gitignored `.env`
-   file so `serve.py` automatically refreshes `.bff_session` whenever a `401`
-   occurs.
+3. Optional, local only: set `SWIMPB_USER` and `SWIMPB_PASS` in a gitignored
+   `.env` file so `serve.py` refreshes `.bff_session` whenever a `401` occurs.
+   Do not set those on the hosted project.
 
 Everything not behind the API keeps working without a session: any swimmer
 already cached, plus all of the motivational standards, PNS meet cuts, and the
@@ -173,6 +175,14 @@ Power points are computed on USA Swimming's servers — the official calculator
 carries no formula — and every ranking endpoint is closed to anonymous callers.
 A lookalike score would get believed, so there isn't one.
 
+## Hosting
+
+Production is a second Cloudflare Pages project, `swim.tanchao.xyz`. It does
+not share a deployment with the `tanchao.xyz` blog. Build command:
+`sh scripts/pages-dist.sh`. Build output directory: `dist`. The function in
+`functions/` is deployed from the repository root and keeps no session of its
+own. Put the hostname behind Cloudflare Access before sharing it.
+
 ## Layout notes
 
 The board is deliberately **one table**, with stroke groups as full-width rows
@@ -194,6 +204,8 @@ must not be italicised.
 ```
 index.html                      markup + the legend
 serve.py                        local static server + /api/times/swims proxy
+functions/                      hosted sign-in and proxy; no stored session
+scripts/pages-dist.sh           copy static files to dist/ for Pages
 app/api.js                      Data Hub BFF client (device-id, bff_auth_session, errors)
 app/cache.js                    localStorage + sessionStorage, TTL, stale-while-revalidate
 app/time.js                     time parsing / formatting

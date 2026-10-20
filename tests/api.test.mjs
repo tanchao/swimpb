@@ -53,6 +53,12 @@ check("handles key=value or bare CfDJ8 cookie value", () => {
   assert.deepEqual(parseSession(`  ${BFF}\n`), { bffSession: BFF });
 });
 
+check("keeps base64 characters in the cookie value", () => {
+  const token = `${BFF}/abc+def=`;
+  assert.deepEqual(parseSession(`bff_auth_session=${token}`), { bffSession: token });
+  assert.deepEqual(parseSession(token), { bffSession: token });
+});
+
 check("an anonymous request without bff_auth_session yields null", () => {
   const anon = `curl 'https://data.usaswimming.org/api/times/swims/x' -H 'Device-Id: TWFjSW50ZWwgLSBHb29nbGU=' -H 'X-CSRF: 1'`;
   assert.equal(parseSession(anon), null);

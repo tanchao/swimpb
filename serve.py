@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Local dev server + USA Swimming BFF proxy for SwimPB.
 
+The hosted site does not run this file. Cloudflare Pages uses `functions/`.
+This server may keep one session in `.bff_session` for a single local user.
+The Pages Function must not.
+
 Usage:
     python3 serve.py [port]     # default: 8787
 
