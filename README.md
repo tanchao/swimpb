@@ -5,15 +5,12 @@ with one click. Personal tool, no backend, no build step.
 
 ```
 cd ~/workspace/supertan/swimpb
-python3 -m http.server 8787
+python3 serve.py
 open http://localhost:8787
 ```
 
-**After editing anything, hard-reload — Cmd+Shift+R.** `python3 -m http.server`
-sends `Last-Modified` but no `Cache-Control` and no `ETag`, so with no explicit
-freshness the browser falls back to heuristic caching: roughly 10% of the file's
-age. A month-old file gets treated as fresh for days, and the browser never even
-asks the server. A plain reload will happily show you the old app.
+`serve.py` serves the static files (with `Cache-Control: no-cache`) and proxies
+`/api/times/swims/*` to `https://data.usaswimming.org`.
 
 Then search a name, click the swimmer, and hit **☆ Save**. From then on the page
 opens straight onto him.
@@ -22,49 +19,36 @@ opens straight onto him.
 - **/** focuses the search box
 - `?m=<memberId>` deep-links a swimmer
 
-Tests: `for t in convert api ui standards advise; do node tests/$t.test.mjs; done`
-(131 checks, no deps)
+Tests: `for t in convert api ui standards regional advise; do node tests/$t.test.mjs; done`
 
 ## How it works
 
-Everything runs in the browser. It calls USA Swimming's Data Hub API directly —
-the same API `data.usaswimming.org` uses — and caches the result in
-`localStorage`. There is still no server and no proxy.
-
-The reason that's possible: `times-api.usaswimming.org` responds with
-`access-control-allow-origin: *` and echoes back whatever headers the preflight
-asks for. See `docs/API.md` for the verified contract.
+The UI runs in the browser and caches results in `localStorage`. In October 2026
+USA Swimming moved its frontend off `times-api.usaswimming.org` and behind a
+same-origin BFF at `https://data.usaswimming.org/api/times/swims` authenticated
+by an `HttpOnly` `bff_auth_session` cookie, rejecting cross-origin requests with
+HTTP 400. `serve.py` is a tiny stdlib server that serves the static files and
+forwards `/api/*/swims/*` upstream with your `bff_auth_session` cookie. See
+`docs/API.md` for the verified contract.
 
 ## Signing in
 
-**Changed 2026-08-28.** USA Swimming closed anonymous access to swimmer search
-and best times — both now return 403, having worked three weeks earlier.
-`GetMember` and `GetLscs` still answer. This wasn't a block or a throttle:
-back-to-back requests gave 403 for best-times and 200 for `GetMember`, both
-reaching the origin.
+Every Data Hub endpoint now requires a signed-in session (anonymous requests
+return 401). Sign in directly on the page or paste a session cookie:
 
-So the app now takes a session, and you paste your own:
-
-1. Sign in at `data.usaswimming.org`
-2. Open any swimmer's best-times page
-3. DevTools → Network → right-click a `times-api` request → **Copy as cURL**
-4. Paste it into the sign-in row
-
-It pulls `Usas-Session-Id` and `Usas-Sub-Id` out of the paste and derives the
-`rate-key` header itself. Kept in **`sessionStorage`** — one tab, never on disk,
-gone when the tab closes. A session id grants access to your account's view of
-the data, so it doesn't get treated like a preference.
-
-**The page cannot log in for you, and no amount of code changes that.** The
-session starts as an HttpOnly cookie on `.usaswimming.org`, and both USA
-Swimming auth endpoints refuse a cross-origin preflight outright — 400, no CORS
-headers. That would need a backend proxy. What *does* work is header-based auth,
-because `times-api` allows `usas-session-id`, `usas-sub-id` and `rate-key` from
-any origin.
+1. Open the **Sign in to USA Swimming** row and enter your `data.usaswimming.org`
+   username and password (`serve.py` completes the OIDC PKCE handshake, saves the
+   resulting `bff_auth_session` cookie to `.bff_session` with `0600` permissions,
+   and discards the password immediately).
+2. Or expand **Or paste a copied cURL / session cookie** and paste a copied
+   `/api/times/swims` cURL command from DevTools.
+3. Optional: set `SWIMPB_USER` and `SWIMPB_PASS` in a local gitignored `.env`
+   file so `serve.py` automatically refreshes `.bff_session` whenever a `401`
+   occurs.
 
 Everything not behind the API keeps working without a session: any swimmer
-already cached, plus all of the motivational standards and the focus panel,
-which are computed locally.
+already cached, plus all of the motivational standards, PNS meet cuts, and the
+focus panel, which are computed locally.
 
 One call, `GetBestTimesForMember`, returns the swimmer's bests in all three
 courses at once. So the course switch is a re-render, not a refetch — it's
@@ -137,6 +121,21 @@ Standards are published **per quadrennium**, not yearly. The current set is
 2024-2028; the edition is recorded inside the JSON and shown in the UI, so a new
 one is a single regenerated file.
 
+## PNS meet qualification
+
+The highlighted course also shows whether each recorded swim qualifies for the
+current Pacific Northwest Swimming meets, or the exact time still needed:
+
+```
+AGI ✓
+14&U Champs −0.64
+```
+
+The app ships the official 2026-27 AGI and 2026 SC 14&U Champs cuts in
+`app/standards/pns.json`. Converted estimates never qualify. PNS lists 2027 NW
+Age Group Regionals but has not published its cuts, so the UI says that plainly
+instead of using expired 2026 standards.
+
 ## Focus — what to work on next
 
 Under the board, a ranked list of two or three things to work on, each with the
@@ -194,12 +193,15 @@ must not be italicised.
 
 ```
 index.html                      markup + the legend
-app/api.js                      times-api client (headers, session, rate-key, errors)
+serve.py                        local static server + /api/times/swims proxy
+app/api.js                      Data Hub BFF client (device-id, bff_auth_session, errors)
 app/cache.js                    localStorage + sessionStorage, TTL, stale-while-revalidate
 app/time.js                     time parsing / formatting
 app/convert.js                  SCY ↔ SCM ↔ LCM conversion and event mapping
 app/standards.js                motivational ladder: age group, level, gap to next
 app/standards/motivational.json the cut times (generated — see above)
+app/regional.js                 PNS meet qualification lookup
+app/standards/pns.json          current AGI and 14&U Champs cuts
 app/advise.js                   the focus rules (pure, deterministic)
 app/ui.js                       pure render functions
 app/main.js                     state, URL, event wiring

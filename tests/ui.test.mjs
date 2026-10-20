@@ -6,9 +6,12 @@
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import {
+  DEFAULT_COLS,
   advicePanel,
   bestTimesTable,
+  columnToggleBar,
   courseToggle,
+  inferGender,
   sessionBar,
   groupBestTimes,
   pinnedBar,
@@ -148,6 +151,16 @@ const STD_DATA = {
   },
 };
 const STD = { data: STD_DATA, gender: "girls", ageGroup: "17-18" };
+const REGIONAL_DATA = {
+  meets: [
+    { id: "agi", label: "AGI", edition: "test", source: "https://example.com/agi" },
+    { id: "champs", label: "Champs", edition: "test", source: "https://example.com/champs" },
+  ],
+  standards: {
+    agi: { girls: { "15O": { SCY: { "50 FR": 2300 } } } },
+    champs: { girls: { "17-18": { SCY: { "50 FR": 2200 } } } },
+  },
+};
 
 // One event, raced in yards only, so the meters columns must be conversions.
 const oneEvent = groupBestTimes([
@@ -216,6 +229,17 @@ check("faster than the top rung reads AAAA with no target", () => {
   assert.ok(html.includes("AAAA ✓"));
 });
 
+check("selected real time shows meet qualification and exact gap", () => {
+  const html = bestTimesTable(oneEvent, "SCY", { ...STD, regional: REGIONAL_DATA });
+  assert.match(html, /qual met[^>]*[^]*AGI[^]*✓/, "22.64 qualifies for the 23.00 AGI cut");
+  assert.match(html, /Champs[^]*−0\.64/, "22.64 is 0.64 off the 22.00 Champs cut");
+});
+
+check("meet qualification never uses a converted time", () => {
+  const html = bestTimesTable(oneEvent, "LCM", { ...STD, regional: REGIONAL_DATA });
+  assert.ok(!html.includes('class="quals"'));
+});
+
 check("standards bar is silent until the table has loaded", () =>
   assert.equal(standardsBar({ gender: null, ageGroup: null, ready: false }), ""));
 
@@ -242,6 +266,23 @@ check("standards bar explains an out-of-range age instead of going blank", () =>
 check("standards bar escapes the edition string", () => {
   const html = standardsBar({ gender: "girls", ageGroup: "13-14", autoGroup: "13-14", age: 13, edition: '<script>bad()</script>', ready: true });
   assert.ok(!html.includes("<script>"));
+});
+
+check("standards bar names meet editions and unpublished Regionals", () => {
+  const html = standardsBar({
+    gender: "girls",
+    ageGroup: "13-14",
+    autoGroup: "13-14",
+    age: 13,
+    edition: "test",
+    ready: true,
+    regional: {
+      meets: [{ label: "AGI", edition: "2026-27", source: "https://example.com/agi" }],
+      unavailable: [{ label: "NW Regionals", edition: "2027", reason: "Cuts not published by PNS" }],
+    },
+  });
+  assert.ok(html.includes("AGI 2026-27"));
+  assert.ok(html.includes("NW Regionals 2027 — Cuts not published by PNS"));
 });
 
 // --- focus panel ------------------------------------------------------------
@@ -321,23 +362,137 @@ check("signed out stays collapsed until something needs it", () => {
   assert.ok(asked.includes("required"));
 });
 
-check("the paste field is masked, since it holds a credential", () => {
+check("the password and paste fields are masked", () => {
   const html = sessionBar({ signedIn: false, needsSession: true });
+  assert.match(html, /id="login-user"[^>]*type="text"/);
+  assert.match(html, /id="login-pass"[^>]*type="password"/);
   assert.match(html, /id="session-paste"[^>]*type="password"/);
   assert.match(html, /autocomplete="off"/);
 });
 
-check("it explains why the page cannot log in for you", () => {
+check("it explains how credentials are used and keeps cURL fallback", () => {
   const html = sessionBar({ signedIn: false, needsSession: true });
-  assert.ok(/can’t\s+log in for you/.test(html));
-  assert.ok(html.includes("never written to disk"));
-  assert.ok(html.includes("Copy as cURL"), "should name the exact devtools action");
+  assert.ok(html.includes("never stored"));
+  assert.ok(html.includes("Copy as cURL"), "should keep the devtools cURL fallback");
+});
+
+check("busy state disables inputs while signing in", () => {
+  const html = sessionBar({ signedIn: false, needsSession: true, busy: true });
+  assert.ok(html.includes("Signing in…"));
+  assert.match(html, /id="login-pass"[^>]*disabled/);
 });
 
 check("a parse failure is shown and escaped", () => {
   const html = sessionBar({ signedIn: false, error: "<script>bad()</script> nope" });
   assert.ok(html.includes("signin-err"));
   assert.ok(!html.includes("<script>"));
+});
+
+// --- enriched consolidated table & column toggles --------------------------
+
+const enrichedGroups = groupBestTimes(
+  [{ strokeName: "Freestyle", distance: 50, courseCode: "SCY", swimTime: "22.64", swimDate: "2026-09-27T00:00:00" }],
+  [
+    {
+      eventCode: "50 FR SCY",
+      courseCode: "SCY",
+      swimTime: "22.64",
+      swimDate: "2026-09-27T00:00:00",
+      swimmerAge: 17,
+      powerPoints: 612,
+      timeStandard: "AA",
+      meetName: "2026 PN IST Sockeye Sprints",
+    },
+    {
+      eventCode: "50 FR SCY",
+      courseCode: "SCY",
+      swimTime: "23.14",
+      swimDate: "2026-03-29T00:00:00",
+      swimmerAge: 17,
+      powerPoints: 580,
+      timeStandard: "A",
+      meetName: "2026 PN Spring Showdown",
+    },
+  ],
+);
+
+check("default columns show Age, Pts, B–AAAA, Meet Cuts, and Date (with Date after cuts)", () => {
+  const html = bestTimesTable(enrichedGroups, "SCY", { ...STD, regional: REGIONAL_DATA }, DEFAULT_COLS);
+  assert.ok(html.includes("26-09-27"), "expected short swim date");
+  assert.ok(html.includes(">17<"), "expected age at swim");
+  assert.ok(html.includes(">612<"), "expected power points");
+  assert.ok(html.includes('class="cut-bar"'), "expected motivational & meet cut progress bars");
+  assert.ok(!html.includes("Short Meters"), "only active course column is shown");
+  assert.ok(!html.includes("IST Sockeye Sprints"), "meet column off by default");
+  assert.ok(!html.includes('data-toggle-col="drop"'), "drop column removed");
+  assert.ok(!html.includes('data-toggle-col="count"'), "swims count column removed");
+  const thead = /<thead>([\s\S]*?)<\/thead>/.exec(html)?.[1] ?? "";
+  assert.ok(
+    thead.indexOf('data-toggle-col="age"') < thead.indexOf('data-toggle-col="pts"') &&
+      thead.indexOf('data-toggle-col="pts"') < thead.indexOf('data-toggle-col="mot"') &&
+      thead.indexOf('data-toggle-col="mot"') < thead.indexOf('data-toggle-col="meets"') &&
+      thead.indexOf("Champs") < thead.indexOf('data-toggle-col="date"'),
+    "Date must sit after Meet Cuts",
+  );
+});
+
+check("enabling Meet places it right after Date at the end of the table", () => {
+  const allOn = { ...DEFAULT_COLS, meet: true };
+  const html = bestTimesTable(enrichedGroups, "SCY", { ...STD, regional: REGIONAL_DATA }, allOn);
+  assert.ok(html.includes("IST Sockeye Sprints"), "expected shortened meet name");
+  const thead = /<thead>([\s\S]*?)<\/thead>/.exec(html)?.[1] ?? "";
+  assert.ok(
+    thead.indexOf("Champs") < thead.indexOf('data-toggle-col="date"') &&
+      thead.indexOf('data-toggle-col="date"') < thead.indexOf('data-toggle-col="meet"'),
+    "Date must sit right before Meet at the end of the table",
+  );
+});
+
+check("toggling columns off excludes them from the table", () => {
+  const cols = { ...DEFAULT_COLS, mot: false, meets: false };
+  const html = bestTimesTable(enrichedGroups, "SCY", { ...STD, regional: REGIONAL_DATA }, cols);
+  assert.ok(!html.includes('data-toggle-col="mot"'), "motivational cut columns should be hidden");
+  assert.ok(!html.includes('data-toggle-col="meets"'), "meet cut columns should be hidden");
+  assert.ok(html.includes("26-09-27"), "date column remains visible");
+});
+
+check("column toggle bar matches table order andstandardsBar includes course toggle", () => {
+  const html = columnToggleBar(DEFAULT_COLS);
+  const keys = [...html.matchAll(/data-toggle-col="(\w+)"/g)].map((m) => m[1]);
+  assert.deepEqual(keys, ["age", "pts", "mot", "meets", "date", "meet"]);
+  assert.match(html, /class="col-pill on"[^>]*data-toggle-col="date"/);
+  assert.match(html, /class="col-pill off"[^>]*data-toggle-col="meet"/);
+
+  const stdHtml = standardsBar({
+    course: "LCM",
+    gender: "boys",
+    ageGroup: "10U",
+    autoGroup: "10U",
+    age: 9,
+    edition: "2024-2028",
+    ready: true,
+    cols: DEFAULT_COLS,
+  });
+  assert.match(stdHtml, /class="course-btn on"[^>]*data-course="LCM"/, "course toggle in standardsBar highlights LCM");
+});
+
+check("inferGender detects gender from official timeStandard labels", () => {
+  const stdData = {
+    levels: ["B", "BB", "A", "AA", "AAA", "AAAA"],
+    standards: {
+      girls: { "10U": { SCY: { "50 FR": [3979, 3599, 3209, 3089, 2959, 2829] } } },
+      boys: { "10U": { SCY: { "50 FR": [3819, 3459, 3109, 2989, 2869, 2749] } } },
+    },
+  };
+  // 39.33 is B for girls (<= 39.79) but Slower Than B for boys (> 38.19).
+  assert.equal(
+    inferGender([{ eventCode: "50 FR SCY", courseCode: "SCY", swimTime: "39.33", swimmerAge: 9, timeStandard: "Slower Than B" }], stdData),
+    "boys",
+  );
+  assert.equal(
+    inferGender([{ eventCode: "50 FR SCY", courseCode: "SCY", swimTime: "39.33", swimmerAge: 9, timeStandard: "B" }], stdData),
+    "girls",
+  );
 });
 
 console.log(`\n${pass} passed, ${fails.length} failed`);

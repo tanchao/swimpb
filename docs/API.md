@@ -1,25 +1,30 @@
-# USA Swimming public API — verified contract
+# USA Swimming Data Hub API — verified contract
 
-Everything here was verified by direct request on **2026-08-03**. Anything not
-verified is marked.
+Originally verified on **2026-08-03** against `times-api.usaswimming.org`; updated
+on **2026-10-19** after USA Swimming moved the SPA behind a same-origin BFF at
+`https://data.usaswimming.org/api/times/swims` and closed all anonymous access.
 
 ## Base
 
 ```
-https://times-api.usaswimming.org/swims
+https://data.usaswimming.org/api/times/swims
 ```
 
-### Required headers — all four, on every request
+Proxied locally by `serve.py` at `/api/times/swims` because `data.usaswimming.org`
+rejects cross-origin requests (`HTTP 400 "The origin 'http://localhost:8787' is not allowed."`)
+and browsers forbid setting a `Cookie` header on `fetch`.
+
+### Required headers and cookie
 
 ```
-Content-Type: application/json
-AppName:      DataHub
 Device-Id:    <see below>
-Usas-Sub-Id:  Anonymous
+X-CSRF:       1
+Cookie:       bff_auth_session=<ASP.NET Core Data Protection cookie>
+Content-Type: application/json   (on POST requests)
 ```
 
-Omitting `AppName` / `Device-Id` gives `HTTP 500`. A malformed `Device-Id` gives
-`HTTP 400 "Invalid Device-Id format in request headers."`
+Without `bff_auth_session` (or when it expires), every endpoint returns `HTTP 401`.
+All direct calls to `times-api.usaswimming.org` now return `HTTP 403`.
 
 ### Device-Id format
 

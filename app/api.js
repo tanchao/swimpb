@@ -1,16 +1,13 @@
-// Client for USA Swimming's public Data Hub API (times-api.usaswimming.org).
+// Client for USA Swimming's Data Hub BFF API (/api/times/swims).
 //
-// This is the same API the official SPA at data.usaswimming.org calls. It sends
-// `access-control-allow-origin: *` and echoes back any requested headers on the
-// preflight, so a browser-only app can call it directly — no backend, no proxy,
-// no token. Verified 2026-08-03.
-//
-// Not every endpoint is public: GetSwimmerCourses / GetSwimmerEvents /
-// GetSwimmerMeets / GetAllTimesForFilters / GetSwimmerTimeStandards all return
-// 403 without a logged-in session. Only the calls below are reachable
-// anonymously, which is why this app derives everything from best-times.
+// In October 2026 USA Swimming moved the frontend off direct calls to
+// times-api.usaswimming.org and behind a same-origin BFF at
+// https://data.usaswimming.org/api/times/swims authenticated by an HttpOnly
+// `bff_auth_session` cookie. Because data.usaswimming.org rejects cross-origin
+// requests with HTTP 400 and browsers forbid setting a `Cookie` header on fetch,
+// requests go through the local `serve.py` proxy at `/api/times/swims`.
 
-const BASE = "https://times-api.usaswimming.org/swims";
+const BASE = "/api/times/swims";
 const TIMEOUT_MS = 20_000;
 
 // The server rejects arbitrary values with 400 "Invalid Device-Id format in
@@ -35,37 +32,24 @@ function deviceId() {
 // ---------------------------------------------------------------------------
 // Session
 //
-// On 2026-08-28 USA Swimming closed the two endpoints this app is built on —
-// GetMembersForFilters and GetBestTimesForMember both return 403 to anonymous
-// callers, having worked on 2026-08-03. GetMember and GetLscs still answer, so
-// it is per-endpoint authorization, not a block: verified with back-to-back
-// requests that returned 403 and 200 respectively, both x-cache MISS.
+// Every Data Hub endpoint now requires a signed-in `bff_auth_session` cookie
+// (anonymous calls return 401). The user copies any `/api/times/swims` request
+// as cURL from DevTools on data.usaswimming.org and pastes it in; we extract
+// `bff_auth_session` and pass it to the local `serve.py` proxy in `X-Bff-Session`,
+// which forwards it upstream as a Cookie header.
 //
-// A browser-only app CANNOT sign in by itself. The session is an HttpOnly
-// cookie on .usaswimming.org, read by the official app with
-// fetch("…/bff/userinfo", {credentials:"include"}), and both that endpoint and
-// security-api reject a cross-origin preflight outright (400, no CORS headers).
-// No client-side code gets past that.
-//
-// What does work: times-api takes the session in HEADERS, not a cookie, and
-// allows them from any origin —
-//   access-control-allow-origin:  *
-//   access-control-allow-headers: appname,device-id,rate-key,usas-session-id,usas-sub-id
-// So the user pastes their own session in and we send it as headers. Verified
-// 403 → 200 on both closed endpoints with no cookie, no Origin and no Sec-*.
-//
-// It is kept in sessionStorage, never localStorage: a session id grants access
+// Kept in sessionStorage, never localStorage: a session cookie grants access
 // to the account's view of the data, so it dies with the tab rather than
 // sitting on disk.
 
 const SESSION_KEY = "swimpb:session";
 
-/** @returns {{sessionId:string, subId:string}|null} */
+/** @returns {{bffSession:string}|null} */
 export function session() {
   try {
     const raw = sessionStorage.getItem(SESSION_KEY);
     const s = raw ? JSON.parse(raw) : null;
-    return s?.sessionId && s?.subId ? s : null;
+    return typeof s?.bffSession === "string" && s.bffSession ? { bffSession: s.bffSession } : null;
   } catch {
     return null;
   }
@@ -77,36 +61,82 @@ export function clearSession() {
   } catch {
     // Nothing to do — an unwritable store just means no session.
   }
+  if (typeof fetch === "function") {
+    fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+  }
 }
 
 /**
- * Pull a session out of whatever the user pasted.
+ * Sign in with USA Swimming credentials via the local `serve.py` OIDC proxy.
+ * Credentials are exchanged for a `bff_auth_session` cookie and never stored.
+ */
+export async function loginWithCredentials(username, password) {
+  let res;
+  try {
+    res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: username.trim(), password }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (err) {
+    throw new ApiError(
+      err.name === "TimeoutError"
+        ? "USA Swimming did not respond in time."
+        : "Could not reach the local server.",
+      0,
+      { needsSession: true },
+    );
+  }
+
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    // non-JSON response (e.g. 501 from python3 -m http.server)
+  }
+
+  if (res.status === 501 || res.status === 405) {
+    throw new ApiError(
+      "Local API proxy is not running. Start the server with: python3 serve.py",
+      res.status,
+      { needsSession: true },
+    );
+  }
+
+  if (!res.ok || !data?.ok || !data?.bffSession) {
+    throw new ApiError(
+      data?.error || `Sign-in failed (${res.status}).`,
+      res.status,
+      { needsSession: true },
+    );
+  }
+
+  setSession(data.bffSession);
+  return data.bffSession;
+}
+
+/**
+ * Pull a `bff_auth_session` cookie value out of whatever the user pasted.
  *
- * The expected input is DevTools "Copy as cURL" for any times-api request,
- * because that is one copy action and carries both values. Two bare tokens work
- * too: the session id is 32 hex characters and the sub id is a UUID, so they
- * are told apart by shape rather than by order.
+ * Accepts DevTools "Copy as cURL" (`-b 'bff_auth_session=...'`, `--cookie`, or
+ * `-H 'Cookie: ...'`), a `bff_auth_session=<value>` pair, or a bare ASP.NET Core
+ * Data Protection cookie value (`CfDJ8...`) copied from Application → Cookies.
  *
- * @returns {{sessionId:string, subId:string}|null}
+ * @returns {{bffSession:string}|null}
  */
 export function parseSession(text) {
   if (typeof text !== "string" || !text.trim()) return null;
 
-  const headers = {};
-  for (const m of text.matchAll(/-H\s+(['"])([^:'"]+):\s*([\s\S]*?)\1/g)) {
-    headers[m[2].trim().toLowerCase()] = m[3].trim();
-  }
-  let sessionId = headers["usas-session-id"];
-  let subId = headers["usas-sub-id"];
+  const named = text.match(/(?:^|[\s;'"=])bff_auth_session=([A-Za-z0-9_\-~.%+=]{20,})/);
+  if (named) return { bffSession: named[1] };
 
-  // Fall back to shape: a plain paste of the two values, in either order.
-  if (!sessionId) sessionId = text.match(/\b[0-9A-Fa-f]{32}\b/)?.[0];
-  if (!subId) {
-    subId = text.match(/\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/)?.[0];
+  const trimmed = text.trim();
+  if (/^CfDJ8[A-Za-z0-9_-]{20,}$/.test(trimmed)) {
+    return { bffSession: trimmed };
   }
 
-  if (!sessionId || !subId || subId.toLowerCase() === "anonymous") return null;
-  return { sessionId, subId };
+  return null;
 }
 
 /** Store a pasted session. @returns {boolean} whether it parsed */
@@ -119,39 +149,6 @@ export function setSession(text) {
     return false;
   }
   return true;
-}
-
-/**
- * The `rate-key` header the official app sends alongside a session.
- *
- * A faithful port of its derivation: HMAC-SHA256 of a 10-second time bucket,
- * keyed by the session id, prefixed with that bucket divided by the seconds
- * elapsed since UTC midnight. Requires a secure context for crypto.subtle;
- * http://localhost counts as one.
- *
- * Whether the server actually validates this is unknown — a request carrying a
- * freshly derived key is accepted, which does not prove a wrong one is refused.
- * Sending the correct value is right either way.
- */
-export async function rateKey(sessionId) {
-  const bucket = Math.floor(Date.now() / 10_000).toString();
-  const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(sessionId),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(bucket));
-  const hex = [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
-
-  const now = Date.now();
-  const midnight = new Date(now);
-  midnight.setUTCHours(0, 0, 0, 0);
-  const secondsToday = Math.floor((now - midnight.getTime()) / 1000) || 1;
-
-  return `${Math.floor(Number(bucket) / secondsToday)}.${hex}`;
 }
 
 export class ApiError extends Error {
@@ -167,14 +164,14 @@ export class ApiError extends Error {
 async function request(path, body) {
   const active = session();
   const headers = {
-    "Content-Type": "application/json",
-    AppName: "DataHub",
     "Device-Id": deviceId(),
-    "Usas-Sub-Id": active ? active.subId : "Anonymous",
+    "X-CSRF": "1",
   };
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+  }
   if (active) {
-    headers["Usas-Session-Id"] = active.sessionId;
-    headers["rate-key"] = await rateKey(active.sessionId);
+    headers["X-Bff-Session"] = active.bffSession;
   }
 
   let res;
@@ -186,8 +183,6 @@ async function request(path, body) {
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (err) {
-    // A CORS rejection and an offline browser are indistinguishable here, so
-    // say the thing that is true either way.
     throw new ApiError(
       err.name === "TimeoutError"
         ? "USA Swimming did not respond in time."
@@ -196,16 +191,26 @@ async function request(path, body) {
     );
   }
 
+  // Detect `python3 -m http.server` (returns 501 on POST and text/html 404 on GET).
+  if (
+    res.status === 501 ||
+    (res.status === 404 && (res.headers.get("content-type") ?? "").includes("text/html"))
+  ) {
+    throw new ApiError(
+      "Local API proxy is not running. Start the server with: python3 serve.py",
+      res.status,
+    );
+  }
+
   if (res.status === 404) return null; // "no records" — a normal empty result
 
-  // 403 means "sign in", not "something went wrong". Say which of the two it is
-  // rather than surfacing a status code the reader has to interpret.
-  if (res.status === 403) {
+  // 401/403 means "sign in", not "something went wrong".
+  if (res.status === 401 || res.status === 403) {
     throw new ApiError(
       active
         ? "That USA Swimming session is no longer valid. Sign in again and paste a fresh one."
         : "USA Swimming now requires a sign-in for this. Paste a session to continue.",
-      403,
+      res.status,
       { needsSession: true },
     );
   }
@@ -239,10 +244,20 @@ export async function searchSwimmers(name, opts = {}) {
 
 /**
  * Every personal best for a swimmer, across all three courses in one call.
- * @returns {Promise<Array<{swimTimeRecognitionId,strokeName,strokeAbbreviation,distance,courseCode,swimTime}>>}
+ * @returns {Promise<Array<{swimTimeRecognitionId,strokeName,strokeAbbreviation,distance,courseCode,swimTime,swimDate}>>}
  */
 export async function bestTimes(memberId) {
   const res = await request(`/TimesSearch/GetBestTimesForMember/${memberId}`);
+  return res ?? [];
+}
+
+/**
+ * Every recorded individual swim for a swimmer across all meets and courses.
+ * Carries meetName, swimDate, swimmerAge, powerPoints, and timeStandard.
+ * @returns {Promise<Array<{swimTimeId,meetId,meetName,eventId,eventCode,courseCode,swimDate,swimmerAge,powerPoints,swimTime,timeStandard,clubName}>>}
+ */
+export async function allTimes(memberId) {
+  const res = await request("/TimesSearch/GetAllTimesForFilters", { memberId });
   return res ?? [];
 }
 

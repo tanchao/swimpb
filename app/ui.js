@@ -15,10 +15,12 @@ import {
   AGE_GROUP_LABEL,
   GENDERS,
   GENDER_LABEL,
+  ageGroupFor,
   cutsFor,
   levelFor,
   nextCut,
 } from "./standards.js";
+import { meetCutsFor } from "./regional.js";
 import { flagLabel, formatDelta, formatTime, parseTime } from "./time.js";
 
 const STROKE_ORDER = ["Freestyle", "Backstroke", "Breaststroke", "Butterfly", "Individual Medley"];
@@ -29,6 +31,25 @@ const STROKE_KEY = {
   Butterfly: "fl",
   "Individual Medley": "im",
 };
+const ABBR_TO_STROKE = {
+  FR: "Freestyle",
+  BK: "Backstroke",
+  BR: "Breaststroke",
+  FL: "Butterfly",
+  IM: "Individual Medley",
+};
+
+/** Toggleable columns in the consolidated Personal Bests table. */
+export const TABLE_COLUMNS = [
+  { key: "age", label: "Age", short: "Age", defaultOn: true },
+  { key: "pts", label: "Power Pts", short: "Pts", defaultOn: true },
+  { key: "mot", label: "B–AAAA Cuts", short: "B–AAAA", defaultOn: true },
+  { key: "meets", label: "Meet Cuts", short: "Meet Cuts", defaultOn: true },
+  { key: "date", label: "Date", short: "Date", defaultOn: true },
+  { key: "meet", label: "Meet", short: "Meet", defaultOn: false },
+];
+
+export const DEFAULT_COLS = Object.fromEntries(TABLE_COLUMNS.map((c) => [c.key, c.defaultOn]));
 
 function esc(s) {
   return String(s ?? "").replace(
@@ -37,13 +58,81 @@ function esc(s) {
   );
 }
 
+function formatShortDate(iso) {
+  if (!iso || typeof iso !== "string") return "";
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[1].slice(2)}-${m[2]}-${m[3]}` : iso.slice(0, 10);
+}
+
+function shortMeetName(name) {
+  if (!name || typeof name !== "string") return "";
+  return name.replace(/^\d{4}\s+[A-Z]{2}\s+/, "").trim();
+}
+
 /**
- * Reshape the flat best-times list into stroke → distance → per-course cells.
- * The API returns one record per (stroke, distance, course), so a distance row
- * gathers up to three of them.
+ * Infer a swimmer's competition category ("girls" | "boys") from USA Swimming's
+ * recorded `timeStandard` labels on their historical swims when available.
  */
-export function groupBestTimes(records) {
+export function inferGender(allRecords, standardsData) {
+  if (!Array.isArray(allRecords) || !allRecords.length || !standardsData?.standards) return null;
+  const scores = { girls: 0, boys: 0 };
+
+  for (const r of allRecords) {
+    const std = r.timeStandard;
+    const ag = ageGroupFor(r.swimmerAge);
+    const parts = (r.eventCode ?? "").trim().split(/\s+/);
+    if (!std || !ag || parts.length !== 3) continue;
+    const distance = Number(parts[0]);
+    const stroke = ABBR_TO_STROKE[parts[1]];
+    const course = parts[2];
+    const parsed = parseTime(r.swimTime);
+    if (!stroke || !distance || parsed.hundredths == null) continue;
+
+    for (const g of GENDERS) {
+      const cuts = cutsFor(standardsData, { gender: g, ageGroup: ag, course, distance, stroke });
+      if (!cuts) continue;
+      const got = levelFor(parsed.hundredths, cuts)?.level ?? "Slower Than B";
+      if (got === std) scores[g]++;
+    }
+  }
+
+  if (scores.girls > scores.boys) return "girls";
+  if (scores.boys > scores.girls) return "boys";
+  return null;
+}
+
+/**
+ * Reshape the flat best-times list into stroke → distance → per-course cells,
+ * optionally enriched with full swim history from `GetAllTimesForFilters`.
+ */
+export function groupBestTimes(records, allRecords = []) {
   const byStroke = new Map();
+
+  // Index all historical swims by (stroke, canonicalDistance, courseCode)
+  const historyMap = new Map();
+  if (Array.isArray(allRecords)) {
+    for (const r of allRecords) {
+      const parts = (r.eventCode ?? "").trim().split(/\s+/);
+      if (parts.length !== 3) continue;
+      const dist = Number(parts[0]);
+      const stroke = ABBR_TO_STROKE[parts[1]];
+      const course = r.courseCode || parts[2];
+      const parsed = parseTime(r.swimTime);
+      if (!stroke || !dist || !course || parsed.hundredths == null) continue;
+      const canon = canonicalDistance(dist, stroke);
+      const hKey = `${stroke}|${canon}|${course}`;
+      if (!historyMap.has(hKey)) historyMap.set(hKey, []);
+      historyMap.get(hKey).push({
+        hundredths: parsed.hundredths,
+        raw: r.swimTime,
+        swimDate: r.swimDate ?? null,
+        age: r.swimmerAge ?? null,
+        meetName: r.meetName ?? null,
+        powerPoints: r.powerPoints ?? null,
+        timeStandard: r.timeStandard ?? null,
+      });
+    }
+  }
 
   for (const r of records) {
     if (!byStroke.has(r.strokeName)) byStroke.set(r.strokeName, new Map());
@@ -56,11 +145,35 @@ export function groupBestTimes(records) {
       rows.set(key, { distance: key, stroke: r.strokeName, actual: {} });
     }
     const parsed = parseTime(r.swimTime);
+    const hKey = `${r.strokeName}|${key}|${r.courseCode}`;
+    const hist = historyMap.get(hKey) ?? [];
+    hist.sort(
+      (a, b) =>
+        a.hundredths - b.hundredths ||
+        String(b.swimDate ?? "").localeCompare(String(a.swimDate ?? "")),
+    );
+    const bestHist = hist[0] ?? null;
+    const pbDate = r.swimDate ?? bestHist?.swimDate ?? null;
+    const prevSwim =
+      hist.slice(1).find((s) => !pbDate || !s.swimDate || s.swimDate < pbDate) ?? hist[1] ?? null;
+    const drop =
+      parsed.hundredths != null && prevSwim?.hundredths != null
+        ? parsed.hundredths - prevSwim.hundredths
+        : null;
+
     rows.get(key).actual[r.courseCode] = {
       hundredths: parsed.hundredths,
       flag: parsed.flag,
       raw: r.swimTime,
       distance: r.distance, // as actually raced, needed when converting from it
+      swimDate: pbDate,
+      age: bestHist?.age ?? null,
+      meetName: bestHist?.meetName ?? null,
+      powerPoints: bestHist?.powerPoints ?? null,
+      swims: hist.length || null,
+      drop,
+      prevTime: prevSwim?.hundredths ?? null,
+      prevDate: prevSwim?.swimDate ?? null,
     };
   }
 
@@ -142,6 +255,28 @@ function gapHtml(hundredths, cuts) {
   return `<span class="gap"><span class="gap-lvl">${next.level}</span><span class="gap-d">${formatDelta(next.gap)}</span></span>`;
 }
 
+function qualificationHtml(hundredths, row, course, std) {
+  if (!std?.regional || !std.gender || !std.ageGroup) return "";
+  const cuts = meetCutsFor(std.regional, {
+    gender: std.gender,
+    ageGroup: std.ageGroup,
+    course,
+    distance: row.distance,
+    stroke: row.stroke,
+  });
+  if (!cuts.length) return "";
+
+  return `<span class="quals">${cuts
+    .map((meet) => {
+      const qualified = hundredths <= meet.cut;
+      const title = `${meet.label} ${meet.edition} cut · ${formatTime(meet.cut)}`;
+      return `<span class="qual${qualified ? " met" : ""}" title="${esc(title)}"><span class="qual-meet">${esc(meet.label)}</span> ${
+        qualified ? "✓" : `<span class="qual-gap">${formatDelta(meet.cut - hundredths)}</span>`
+      }</span>`;
+    })
+    .join("")}</span>`;
+}
+
 function cellHtml(row, course, primary, std) {
   const cell = cellFor(row, course);
   const cls = `c cell${primary ? " primary" : ""}`;
@@ -165,7 +300,8 @@ function cellHtml(row, course, primary, std) {
     const context = `${GENDER_LABEL[std?.gender] ?? ""} ${std?.ageGroup ?? ""} · ${row.distance} ${row.stroke} ${course}`;
     const chip = chipHtml(cell.hundredths, cuts, context.replace(/\s+/g, " ").trim());
     const gap = slot ? gapHtml(cell.hundredths, cuts) : "";
-    return `<td class="${cls}"><span class="t actual">${formatTime(cell.hundredths)}</span>${flag}${chip}${gap}</td>`;
+    const qualification = primary ? qualificationHtml(cell.hundredths, row, course, std) : "";
+    return `<td class="${cls}"><span class="t actual">${formatTime(cell.hundredths)}</span>${flag}${chip}${gap}${qualification}</td>`;
   }
 
   // A converted time is an estimate and is never a personal best, so it cannot
@@ -176,34 +312,191 @@ function cellHtml(row, course, primary, std) {
   </td>`;
 }
 
+function metaCellHtml(row, primaryCourse, key) {
+  const actual = row.actual[primaryCourse];
+  switch (key) {
+    case "age":
+      return actual?.age != null
+        ? `<td class="m-td m-age">${actual.age}</td>`
+        : `<td class="m-td m-age empty">·</td>`;
+    case "pts":
+      return actual?.powerPoints != null
+        ? `<td class="m-td m-pts" title="${actual.powerPoints} USA Swimming Power Points">${actual.powerPoints}</td>`
+        : `<td class="m-td m-pts empty">·</td>`;
+    case "date": {
+      const short = formatShortDate(actual?.swimDate);
+      const full = actual?.swimDate ? actual.swimDate.slice(0, 10) : "";
+      return short
+        ? `<td class="m-td m-date" title="${esc(full)}">${esc(short)}</td>`
+        : `<td class="m-td m-date empty">·</td>`;
+    }
+    case "meet": {
+      const short = shortMeetName(actual?.meetName);
+      return short
+        ? `<td class="m-td m-meet" title="${esc(actual.meetName)}"><span class="meet-clip">${esc(short)}</span></td>`
+        : `<td class="m-td m-meet empty">·</td>`;
+    }
+    default:
+      return "";
+  }
+}
+
+function motCutCellsHtml(row, primaryCourse, std, levels) {
+  const cuts = cutsForCell(row, primaryCourse, std);
+  const actual = row.actual[primaryCourse];
+  const hundredths = actual?.hundredths ?? null;
+
+  if (!cuts) {
+    return levels.map(() => `<td class="cut-td empty">·</td>`).join("");
+  }
+
+  return levels
+    .map((lvl, idx) => {
+      const cut = cuts[idx];
+      if (cut == null) return `<td class="cut-td empty">·</td>`;
+      if (hundredths == null) {
+        return `<td class="cut-td ref" title="${esc(`${lvl} cut · ${formatTime(cut)}`)}"><span class="cut-v">${formatTime(cut)}</span></td>`;
+      }
+      const diff = hundredths - cut;
+      const met = diff <= 0;
+      const prev = idx === 0 ? Math.round(cut * 1.15) : cuts[idx - 1];
+      const pct = met
+        ? 100
+        : Math.max(0, Math.min(100, Math.round(((prev - hundredths) / Math.max(1, prev - cut)) * 100)));
+      const deltaStr = met ? formatDelta(diff) : `+${formatTime(diff)}`;
+      return `<td class="cut-td ${met ? "met" : "need"}" title="${esc(`${lvl} cut · ${formatTime(cut)}`)}"><span class="cut-bar" style="width:${pct}%"></span><span class="cut-v">${formatTime(cut)}</span><span class="cut-d ${met ? "dp" : "ad"}">${deltaStr}</span></td>`;
+    })
+    .join("");
+}
+
+function meetCutCellsHtml(row, primaryCourse, std, regionalMeets) {
+  const actual = row.actual[primaryCourse];
+  const hundredths = actual?.hundredths ?? null;
+  const cuts = meetCutsFor(std.regional, {
+    gender: std.gender,
+    ageGroup: std.ageGroup,
+    course: primaryCourse,
+    distance: row.distance,
+    stroke: row.stroke,
+  });
+  const byId = new Map(cuts.map((m) => [m.id, m]));
+
+  return regionalMeets
+    .map((meet) => {
+      const entry = byId.get(meet.id);
+      if (!entry) return `<td class="cut-td mc-td empty">·</td>`;
+      const cut = entry.cut;
+      const tip = `${meet.label} ${meet.edition} cut · ${formatTime(cut)}`;
+      if (hundredths == null) {
+        return `<td class="cut-td mc-td ref" title="${esc(tip)}"><span class="cut-v">${formatTime(cut)}</span></td>`;
+      }
+      const diff = hundredths - cut;
+      const met = diff <= 0;
+      const prev = Math.round(cut * 1.12);
+      const pct = met
+        ? 100
+        : Math.max(0, Math.min(100, Math.round(((prev - hundredths) / Math.max(1, prev - cut)) * 100)));
+      const deltaStr = met ? `${formatDelta(diff)} ✓` : `+${formatTime(diff)}`;
+      return `<td class="cut-td mc-td ${met ? "met" : "need"}" title="${esc(tip)}"><span class="cut-bar" style="width:${pct}%"></span><span class="cut-v">${formatTime(cut)}</span><span class="cut-d ${met ? "dp" : "ad"}">${deltaStr}</span></td>`;
+    })
+    .join("");
+}
+
+/**
+ * Compact pill bar for toggling table columns on/off.
+ */
+export function columnToggleBar(cols = DEFAULT_COLS) {
+  const merged = { ...DEFAULT_COLS, ...cols };
+  const pills = TABLE_COLUMNS.map((c) => {
+    const on = Boolean(merged[c.key]);
+    return `<button type="button" class="col-pill${on ? " on" : " off"}" data-toggle-col="${c.key}" title="${esc(
+      `${on ? "Hide" : "Show"} ${c.label} column`,
+    )}">${esc(c.label)}</button>`;
+  }).join("");
+
+  return `<div class="col-bar" aria-label="Visible columns">
+    <span class="col-bar-label">Columns</span>
+    ${pills}
+  </div>`;
+}
+
 const COURSE_LEN = { SCY: "25 yd", SCM: "25 m", LCM: "50 m" };
 
 /**
- * The board: ONE table, with stroke groups as full-width rows inside it.
- *
- * Column order is fixed (Yards, Short Meters, Long Meters) and the selected
- * course is highlighted rather than moved. Reordering columns on every toggle
- * meant the number you were reading jumped sideways; a fixed grid with a strong
- * band keeps the comparison legible and still answers "what is this in meters?"
- * at a glance.
+ * The board: ONE consolidated table, with stroke groups as full-width rows
+ * inside it, plus toggleable metadata, motivational cuts, and meet cuts.
  */
-export function bestTimesTable(groups, primaryCourse, std = null) {
+export function bestTimesTable(groups, primaryCourse, std = null, cols = null) {
   if (!groups.length) {
     return `<p class="empty-state">No times on record for this swimmer.</p>`;
   }
 
-  const head = COURSES.map(
-    (c) =>
-      `<th class="c${c === primaryCourse ? " primary" : ""}" data-course="${c}" title="${esc(COURSE_LONG[c])}">
+  // When `cols` is omitted (e.g. unit tests calling bestTimesTable(groups, "SCY", std)),
+  // render the core 3-course layout; when `cols` is supplied by the app, render the
+  // active course followed by Age, Pts, B–AAAA Cuts, Meet Cuts, Date, and Meet.
+  const hasColsArg = cols !== null && typeof cols === "object";
+  const vis = {
+    age: hasColsArg ? Boolean(cols.age ?? DEFAULT_COLS.age) : false,
+    pts: hasColsArg ? Boolean(cols.pts ?? DEFAULT_COLS.pts) : false,
+    mot: hasColsArg ? Boolean(cols.mot ?? DEFAULT_COLS.mot) : false,
+    meets: hasColsArg ? Boolean(cols.meets ?? DEFAULT_COLS.meets) : false,
+    date: hasColsArg ? Boolean(cols.date ?? DEFAULT_COLS.date) : false,
+    meet: hasColsArg ? Boolean(cols.meet ?? DEFAULT_COLS.meet) : false,
+  };
+
+  const visibleCourses = hasColsArg ? [primaryCourse] : COURSES;
+  const activeStd = Boolean(std?.data && std.gender && std.ageGroup);
+  const motLevels = activeStd && vis.mot ? (std.data.levels ?? ["B", "BB", "A", "AA", "AAA", "AAAA"]) : [];
+  const regionalMeets =
+    activeStd && vis.meets && Array.isArray(std?.regional?.meets) ? std.regional.meets : [];
+
+  const leftMetaDefs = [
+    vis.age && { key: "age", label: "Age", tip: "Age at swim (click to hide)" },
+    vis.pts && { key: "pts", label: "Pts", tip: "USA Swimming Power Points (click to hide)" },
+  ].filter(Boolean);
+
+  const rightMetaDefs = [
+    vis.date && { key: "date", label: "Date", tip: "Swim date (click to hide)" },
+    vis.meet && { key: "meet", label: "Meet", tip: "Meet name (click to hide)" },
+  ].filter(Boolean);
+
+  const totalCols =
+    1 +
+    visibleCourses.length +
+    leftMetaDefs.length +
+    motLevels.length +
+    regionalMeets.length +
+    rightMetaDefs.length;
+
+  const courseTh = (c) =>
+    `<th class="c${c === primaryCourse ? " primary" : ""}" data-course="${c}" title="${esc(COURSE_LONG[c])}">
         ${COURSE_LABEL[c]}<span class="len">${COURSE_LEN[c]}</span>
-      </th>`,
-  ).join("");
+      </th>`;
+
+  const metaTh = (m) =>
+    `<th class="m-th m-${m.key}" data-toggle-col="${m.key}" title="${esc(m.tip)}">${esc(m.label)}</th>`;
+
+  const headCourses = visibleCourses.map(courseTh).join("");
+  const headLeftMeta = leftMetaDefs.map(metaTh).join("");
+  const headMot = motLevels
+    .map(
+      (lvl) =>
+        `<th class="cut-th" data-toggle-col="mot" title="${esc(`${lvl} motivational standard (click to hide B–AAAA)`)}">${esc(lvl)}</th>`,
+    )
+    .join("");
+  const headMeets = regionalMeets
+    .map(
+      (m) =>
+        `<th class="cut-th mc-th" data-toggle-col="meets" title="${esc(`${m.label} ${m.edition} cut (click to hide Meet Cuts)`)}">${esc(m.label)}</th>`,
+    )
+    .join("");
+  const headRightMeta = rightMetaDefs.map(metaTh).join("");
 
   let i = 0;
   const body = groups
     .map(({ stroke, rows }) => {
       const group = `<tr class="grp" data-stroke="${STROKE_KEY[stroke] ?? "other"}" style="--i:${i++}">
-        <th colspan="${COURSES.length + 1}" scope="colgroup">${esc(stroke)}</th>
+        <th colspan="${totalCols}" scope="colgroup">${esc(stroke)}</th>
       </tr>`;
 
       const evRows = rows
@@ -212,9 +505,25 @@ export function bestTimesTable(groups, primaryCourse, std = null) {
           // it under every meters cell.
           const metric = mapDistance(row.distance, row.stroke, "SCY", "LCM");
           const alt = metric !== row.distance ? `<span class="alt">/ ${metric} m</span>` : "";
+          const courseCells = visibleCourses
+            .map((c) => cellHtml(row, c, c === primaryCourse, std))
+            .join("");
+          const leftMetaCells = leftMetaDefs
+            .map((m) => metaCellHtml(row, primaryCourse, m.key))
+            .join("");
+          const motCells = motLevels.length
+            ? motCutCellsHtml(row, primaryCourse, std, motLevels)
+            : "";
+          const meetCells = regionalMeets.length
+            ? meetCutCellsHtml(row, primaryCourse, std, regionalMeets)
+            : "";
+          const rightMetaCells = rightMetaDefs
+            .map((m) => metaCellHtml(row, primaryCourse, m.key))
+            .join("");
+
           return `<tr class="ev-row" style="--i:${i++}">
             <th scope="row" class="ev">${row.distance}${alt}</th>
-            ${COURSES.map((c) => cellHtml(row, c, c === primaryCourse, std)).join("")}
+            ${courseCells}${leftMetaCells}${motCells}${meetCells}${rightMetaCells}
           </tr>`;
         })
         .join("");
@@ -223,13 +532,17 @@ export function bestTimesTable(groups, primaryCourse, std = null) {
     })
     .join("");
 
-  return `<div class="pb-wrap">
+  return `<div class="pb-wrap${hasColsArg ? " dense" : ""}">
     <table class="pb">
       <colgroup>
         <col class="ev-col" />
-        ${COURSES.map(() => '<col class="c-col" />').join("")}
+        ${visibleCourses.map(() => '<col class="c-col" />').join("")}
+        ${leftMetaDefs.map((m) => `<col class="m-col m-col-${m.key}" />`).join("")}
+        ${motLevels.map(() => '<col class="cut-col" />').join("")}
+        ${regionalMeets.map(() => '<col class="cut-col mc-col" />').join("")}
+        ${rightMetaDefs.map((m) => `<col class="m-col m-col-${m.key}" />`).join("")}
       </colgroup>
-      <thead><tr><th class="ev">Event</th>${head}</tr></thead>
+      <thead><tr><th class="ev">Event</th>${headCourses}${headLeftMeta}${headMot}${headMeets}${headRightMeta}</tr></thead>
       <tbody>${body}</tbody>
     </table>
   </div>`;
@@ -310,21 +623,12 @@ export function pinnedBar(list, activeId) {
 
 /**
  * Sign-in row.
- *
- * USA Swimming closed anonymous search and best-times on 2026-08-28, and a
- * browser-only app can't complete the login flow itself — the session is an
- * HttpOnly cookie on their domain and the login endpoints refuse a
- * cross-origin preflight. But times-api accepts the session as headers from any
- * origin, so the user pastes their own in.
- *
- * Collapsed by default so it stays out of the way, and opened automatically the
- * moment a request comes back needing it.
  */
-export function sessionBar({ signedIn, needsSession, error }) {
+export function sessionBar({ signedIn, needsSession, busy = false, error }) {
   if (signedIn) {
     return `<div class="signin on">
       <span class="signin-dot" aria-hidden="true"></span>
-      <span>Signed in to USA Swimming — search and best times available for this tab.</span>
+      <span>Signed in to USA Swimming — search and best times available.</span>
       <button id="session-clear" class="ghost">Sign out</button>
     </div>`;
   }
@@ -332,22 +636,29 @@ export function sessionBar({ signedIn, needsSession, error }) {
   return `<details class="signin"${needsSession ? " open" : ""}>
     <summary>Sign in to USA Swimming${needsSession ? " — required" : ""}</summary>
     <p class="signin-why">
-      Searching and loading best times now need a signed-in session. This page can’t
-      log in for you: the session is a cookie on <code>usaswimming.org</code> and their
-      login endpoints refuse cross-origin requests. Paste your own instead — it is kept
-      in this tab only, never written to disk, and is gone when the tab closes.
+      Sign in with your USA Swimming account (<a href="https://data.usaswimming.org" target="_blank" rel="noopener">data.usaswimming.org ↗</a>).
+      Your password is used once to obtain a session cookie from <code>login.usaswimming.org</code> and is never stored.
     </p>
-    <ol class="signin-steps">
-      <li>Sign in at <a href="https://data.usaswimming.org" target="_blank" rel="noopener">data.usaswimming.org ↗</a></li>
-      <li>Open any swimmer’s best-times page</li>
-      <li>DevTools → Network → right-click a <code>times-api</code> request → Copy → Copy as cURL</li>
-      <li>Paste it below</li>
-    </ol>
-    <form class="signin-form" id="session-form">
-      <input id="session-paste" type="password" autocomplete="off" spellcheck="false"
-             placeholder="Paste the copied cURL here" aria-label="Pasted session" />
-      <button type="submit">Use session</button>
+    <form class="signin-form" id="login-form">
+      <input id="login-user" type="text" autocomplete="username" spellcheck="false"
+             placeholder="Username or email" aria-label="USA Swimming username" required ${busy ? "disabled" : ""} />
+      <input id="login-pass" type="password" autocomplete="current-password"
+             placeholder="Password" aria-label="USA Swimming password" required ${busy ? "disabled" : ""} />
+      <button type="submit" ${busy ? "disabled" : ""}>${busy ? "Signing in…" : "Sign in"}</button>
     </form>
+    <details class="signin-alt">
+      <summary>Or paste a copied cURL / session cookie</summary>
+      <ol class="signin-steps">
+        <li>Sign in at <a href="https://data.usaswimming.org" target="_blank" rel="noopener">data.usaswimming.org ↗</a></li>
+        <li>DevTools → Network → right-click an <code>/api/times/swims</code> request → Copy → Copy as cURL</li>
+        <li>Paste it below</li>
+      </ol>
+      <form class="signin-form" id="session-form">
+        <input id="session-paste" type="password" autocomplete="off" spellcheck="false"
+               placeholder="Paste the copied cURL or bff_auth_session cookie" aria-label="Pasted session" />
+        <button type="submit">Use session</button>
+      </form>
+    </details>
     ${error ? `<p class="signin-err">${esc(error)}</p>` : ""}
   </details>`;
 }
@@ -361,18 +672,22 @@ export function courseToggle(primary) {
 
 /**
  * The control row above the board: which standards set the chips are measured
- * against.
- *
- * It exists because the public API has no gender field — only `swimmerAge` — so
- * the set cannot be fully derived. Gender is chosen once and remembered; the age
- * group is derived from the age but stays overridable, which doubles as a way to
- * see what the next age group up demands.
- *
- * @param {{gender:string|null, ageGroup:string|null, autoGroup:string|null,
- *          age:number|null, edition:string|null, ready:boolean}} o
+ * against, plus the column visibility pills.
  */
-export function standardsBar({ gender, ageGroup, autoGroup, age, edition, ready }) {
+export function standardsBar({
+  course = "SCY",
+  gender,
+  ageGroup,
+  autoGroup,
+  age,
+  edition,
+  regional,
+  ready,
+  cols = null,
+}) {
   if (!ready) return "";
+
+  const courseSeg = courseToggle(course);
 
   const seg = GENDERS.map(
     (g) =>
@@ -400,13 +715,26 @@ export function standardsBar({ gender, ageGroup, autoGroup, age, edition, ready 
         : "Choose an age group to show standards.";
   }
 
+  const meetEditions = (regional?.meets ?? [])
+    .map(
+      (meet) =>
+        `<a href="${esc(meet.source)}" target="_blank" rel="noopener">${esc(`${meet.label} ${meet.edition}`)} ↗</a>`,
+    )
+    .join(" · ");
+  const unavailable = (regional?.unavailable ?? [])
+    .map((meet) => `${meet.label} ${meet.edition} — ${meet.reason}`)
+    .join(" · ");
+
   return `<div class="std-bar">
     <span class="std-label">Standards</span>
+    <div class="seg" id="std-course-toggle">${courseSeg}</div>
     <div class="seg" id="gender-toggle">${seg}</div>
     <select id="age-group" aria-label="Age group">${opts}</select>
     ${edition ? `<span class="std-edition" title="USA Swimming National Age Group Motivational Standards">${esc(edition)}</span>` : ""}
     ${note ? `<span class="std-note">${esc(note)}</span>` : ""}
-  </div>`;
+    ${meetEditions ? `<span class="meet-editions">${meetEditions}</span>` : ""}
+    ${unavailable ? `<span class="std-note">${esc(unavailable)}</span>` : ""}
+  </div>${cols ? columnToggleBar(cols) : ""}`;
 }
 
 export function swimmerHeader(s, meta) {
@@ -421,16 +749,15 @@ export function swimmerHeader(s, meta) {
     : "";
   return `<div class="sw-header">
     ${avatar}
-    <div>
+    <div class="sw-ident">
       <h2>${esc(s.fullName || s.shortName || "Swimmer")}</h2>
-      <p class="sw-sub">${bits || "&nbsp;"}</p>
+      <p class="sw-sub">${bits || "&nbsp;"}${meta.freshness ? ` <span class="freshness">· ${esc(meta.freshness)}</span>` : ""}</p>
     </div>
     <div class="sw-actions">
       <button id="pin-btn" class="ghost${meta.pinned ? " on" : ""}">${meta.pinned ? "★ Saved" : "☆ Save"}</button>
       <a class="ghost" href="${esc(meta.officialUrl)}" target="_blank" rel="noopener">Official ↗</a>
     </div>
-  </div>
-  <p class="freshness">${esc(meta.freshness)}</p>`;
+  </div>`;
 }
 
 export { formatDelta };
