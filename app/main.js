@@ -13,12 +13,17 @@ import {
   searchSwimmers,
   session,
   setSession,
+  swimDetail,
 } from "./api.js?v=4";
 import * as cache from "./cache.js";
 import { COURSES } from "./convert.js";
+import { ageBest, meetsByDate } from "./history.js";
+import { adviseEvent, progress } from "./progress.js";
+import { halves, normalizeSplits } from "./splits.js";
 import { loadRegionalStandards } from "./regional.js";
 import { ageGroupFor, loadStandards } from "./standards.js";
-import * as ui from "./ui.js?v=6";
+import * as ui from "./ui.js?v=9";
+import * as views from "./views.js?v=9";
 
 const el = (id) => document.getElementById(id);
 
@@ -30,6 +35,15 @@ const state = {
   bestRecords: [],
   allRecords: [],
   groups: [],
+  // Which table fills the main area: "best" | "ages" | "meets".
+  view: cache.pref("view", "best"),
+  meetOrder: cache.pref("meetOrder", "newest"),
+  // The event whose progress report is open: {stroke, distance}, or null.
+  open: null,
+  // Lap splits, fetched on demand, one entry per swim id:
+  // {status:"loading"} | {status:"ready", detail} | {status:"error", message}.
+  splits: new Map(),
+  openSwims: new Set(),
   results: null,
   // The motivational standards table, and which slice of it to measure against.
   standards: null,
@@ -112,26 +126,203 @@ function renderStandards() {
         edition: state.standards?.edition ?? null,
         regional: state.regionalStandards,
         ready: Boolean(state.standards),
-        cols: state.cols,
+        cols: state.view === "best" ? state.cols : null,
       })
     : "";
 }
 
+function renderViews() {
+  el("views").innerHTML = state.swimmer ? views.viewTabs(state.view) : "";
+}
+
+/** The board row for the open report, or null when it no longer exists. */
+function openRow() {
+  if (!state.open) return null;
+  for (const g of state.groups) {
+    if (g.stroke !== state.open.stroke) continue;
+    return g.rows.find((r) => r.distance === state.open.distance) ?? null;
+  }
+  return null;
+}
+
+/** What the splits views need: which swims are open, and what each one has. */
+const splitsView = () => ({
+  open: { has: (id) => state.openSwims.has(String(id)) },
+  get: (id) => state.splits.get(String(id)),
+});
+
+/**
+ * Fetch one swim's detail, once. Both an explicit click and the fade rule go
+ * through here, so a swim is never requested twice.
+ */
+function ensureSplits(rawId) {
+  // Ids come from the DOM as strings and from the API as numbers.
+  if (rawId == null) return;
+  const id = String(rawId);
+  if (state.splits.has(id)) return;
+  state.splits.set(id, { status: "loading" });
+  cache
+    .swr(`swim:${id}`, () => swimDetail(id))
+    .then(({ data }) => state.splits.set(id, { status: "ready", detail: data }))
+    .catch((err) =>
+      state.splits.set(id, {
+        status: "error",
+        message: err instanceof ApiError ? err.message : "Could not load the lap splits.",
+      }),
+    )
+    .finally(rerenderSplits);
+}
+
+/**
+ * Splits change only the meets table and the report drawer. Rebuilding the
+ * board for them would replay its row reveal on every click.
+ */
+function rerenderSplits() {
+  if (!state.swimmer) return;
+  if (state.view === "meets") renderTimes();
+  else renderReport();
+}
+
+function toggleSwim(id) {
+  if (state.openSwims.has(id)) state.openSwims.delete(id);
+  else {
+    state.openSwims.add(id);
+    // A failed fetch is retried by the next explicit click, never automatically.
+    if (state.splits.get(id)?.status === "error") state.splits.delete(id);
+    ensureSplits(id);
+  }
+  rerenderSplits();
+}
+
+/**
+ * Front half against back half of the best swim, for events where that means
+ * something. Fetching is automatic here (one cached request) because the fade
+ * rule is worthless without it; an IM and a sprint have no meaningful halves.
+ */
+function bestSwimHalves(row, prog) {
+  if (!prog.ready || row.stroke === "Individual Medley" || row.distance < 200) return null;
+  const id = prog.lastBest.id;
+  if (id == null) return null;
+  ensureSplits(id);
+  const info = state.splits.get(String(id));
+  if (info?.status !== "ready") return null;
+  return halves(
+    normalizeSplits(info.detail?.splits, prog.lastBest.hundredths, {
+      distance: row.distance,
+      stroke: row.stroke,
+      course: state.course,
+    }),
+    row.stroke,
+  );
+}
+
+function renderReport() {
+  const host = el("report");
+  const row = openRow();
+  if (!row) {
+    host.hidden = true;
+    host.innerHTML = "";
+    return;
+  }
+  const std = standardsContext();
+  const prog = progress(row, state.course);
+  const keep = host.scrollTop;
+  host.innerHTML = views.eventReport({
+    row,
+    course: state.course,
+    prog,
+    advice: adviseEvent(state.groups, row, std, state.course, prog, 3, {
+      halves: bestSwimHalves(row, prog),
+    }),
+    std,
+    edition: state.standards?.edition,
+    splits: splitsView(),
+  });
+  host.hidden = false;
+  host.scrollTop = keep;
+}
+
+/**
+ * Mark the open row in place. Opening a report must not rebuild the board: that
+ * would replay the row reveal animation on every click.
+ */
+function markOpenRow() {
+  for (const tr of el("times").querySelectorAll("tr.ev-row")) {
+    const open =
+      state.open?.stroke === tr.dataset.stroke && state.open?.distance === Number(tr.dataset.distance);
+    tr.setAttribute("aria-expanded", String(open));
+  }
+  renderReport();
+}
+
+/** Open the report for a row, or close it when that row is already open. */
+function toggleReport(stroke, distance, { focus = false } = {}) {
+  const same = state.open?.stroke === stroke && state.open?.distance === distance;
+  state.open = same ? null : { stroke, distance };
+  markOpenRow();
+  if (focus && state.open) el("report-close")?.focus();
+}
+
+function closeReport() {
+  if (!state.open) return;
+  state.open = null;
+  markOpenRow();
+}
+
+let renderedView = null;
+
 function renderTimes() {
   const std = standardsContext();
-  el("times").innerHTML = ui.bestTimesTable(state.groups, state.course, std, state.cols);
-  // The ruler and the advice move together, so they re-render together.
-  el("advice").innerHTML = std
-    ? ui.advicePanel(advise(state.groups, std, state.course), state.course, state.standards?.edition)
-    : "";
+  const host = el("times");
+  // A re-render must not throw the reader back to the left edge of a wide table.
+  const keep = renderedView === state.view ? (host.querySelector(".pb-wrap")?.scrollLeft ?? 0) : 0;
+
+  if (state.view === "ages") {
+    host.innerHTML = views.ageBestTable(ageBest(state.groups, state.course, std), state.course, {
+      open: state.open,
+      std,
+    });
+  } else if (state.view === "meets") {
+    host.innerHTML = views.meetsTable(meetsByDate(state.groups, state.course), state.course, {
+      order: state.meetOrder,
+      splits: splitsView(),
+    });
+  } else {
+    host.innerHTML = ui.bestTimesTable(state.groups, state.course, std, state.cols, state.open);
+  }
+  renderedView = state.view;
+  const wrap = host.querySelector(".pb-wrap");
+  if (wrap) wrap.scrollLeft = keep;
+
+  renderReport();
+  // The ruler and the advice move together, so they re-render together. The
+  // advice is about the board, so it only shows with the board.
+  el("advice").innerHTML =
+    std && state.view === "best"
+      ? ui.advicePanel(advise(state.groups, std, state.course), state.course, state.standards?.edition)
+      : "";
+}
+
+function setView(view) {
+  if (!views.VIEWS.some((v) => v.key === view) || view === state.view) return;
+  state.view = view;
+  // Only the board and the matrix have event rows to open a report from.
+  state.open = null;
+  cache.setPref("view", view);
+  renderViews();
+  renderStandards();
+  renderTimes();
 }
 
 function renderSwimmer(meta = {}) {
   if (!state.swimmer) {
     el("swimmer").innerHTML = "";
     el("standards").innerHTML = "";
+    el("views").innerHTML = "";
     el("times").innerHTML = "";
     el("advice").innerHTML = "";
+    state.open = null;
+    renderReport();
     return;
   }
   el("swimmer").innerHTML = ui.swimmerHeader(state.swimmer, {
@@ -139,6 +330,7 @@ function renderSwimmer(meta = {}) {
     officialUrl: officialUrl(state.swimmer.memberId),
     freshness: meta.freshness ?? "",
   });
+  renderViews();
   renderStandards();
   renderTimes();
 }
@@ -194,6 +386,8 @@ async function selectSwimmer(swimmer) {
   state.bestRecords = [];
   state.allRecords = [];
   state.groups = [];
+  state.open = null;
+  state.openSwims.clear();
   state.results = null;
   // Both are per swimmer: a family checks more than one, and they don't share a
   // gender or an age group.
@@ -441,14 +635,44 @@ el("standards").addEventListener("change", (e) => {
   setStandardsSet({ ageGroupOverride: e.target.value || null });
 });
 
+el("views").addEventListener("click", (e) => {
+  const tab = e.target.closest("[data-view]");
+  if (tab) setView(tab.dataset.view);
+});
+
 el("times").addEventListener("click", (e) => {
+  const splitsBtn = e.target.closest("[data-splits]");
+  if (splitsBtn) {
+    toggleSwim(splitsBtn.dataset.splits);
+    return;
+  }
+  if (e.target.closest("[data-meet-order]")) {
+    state.meetOrder = state.meetOrder === "newest" ? "oldest" : "newest";
+    cache.setPref("meetOrder", state.meetOrder);
+    renderTimes();
+    return;
+  }
   const colTh = e.target.closest("[data-toggle-col]");
   if (colTh) {
     toggleColumn(colTh.dataset.toggleCol);
     return;
   }
   const courseTh = e.target.closest("th.c[data-course]");
-  if (courseTh) setCourse(courseTh.dataset.course);
+  if (courseTh) {
+    setCourse(courseTh.dataset.course);
+    return;
+  }
+  const evRow = e.target.closest("tr.ev-row");
+  if (evRow) toggleReport(evRow.dataset.stroke, Number(evRow.dataset.distance));
+});
+
+el("report").addEventListener("click", (e) => {
+  const splitsBtn = e.target.closest("[data-splits]");
+  if (splitsBtn) {
+    toggleSwim(splitsBtn.dataset.splits);
+    return;
+  }
+  if (e.target.closest("#report-close")) closeReport();
 });
 
 // One delegated handler covers both the search results and the saved bar.
@@ -475,6 +699,15 @@ el("swimmer").addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.target.matches("input, textarea")) {
     if (e.key === "Escape") e.target.blur();
+    return;
+  }
+  if (e.key === "Escape") {
+    closeReport();
+    return;
+  }
+  if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("tr.ev-row")) {
+    e.preventDefault();
+    toggleReport(e.target.dataset.stroke, Number(e.target.dataset.distance), { focus: true });
     return;
   }
   if (e.key === "/") {

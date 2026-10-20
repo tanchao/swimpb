@@ -24,7 +24,7 @@ import { meetCutsFor } from "./regional.js";
 import { flagLabel, formatDelta, formatTime, parseTime } from "./time.js";
 
 const STROKE_ORDER = ["Freestyle", "Backstroke", "Breaststroke", "Butterfly", "Individual Medley"];
-const STROKE_KEY = {
+export const STROKE_KEY = {
   Freestyle: "fr",
   Backstroke: "bk",
   Breaststroke: "br",
@@ -51,20 +51,20 @@ export const TABLE_COLUMNS = [
 
 export const DEFAULT_COLS = Object.fromEntries(TABLE_COLUMNS.map((c) => [c.key, c.defaultOn]));
 
-function esc(s) {
+export function esc(s) {
   return String(s ?? "").replace(
     /[&<>"']/g,
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
   );
 }
 
-function formatShortDate(iso) {
+export function formatShortDate(iso) {
   if (!iso || typeof iso !== "string") return "";
   const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return m ? `${m[1].slice(2)}-${m[2]}-${m[3]}` : iso.slice(0, 10);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : iso.slice(0, 10);
 }
 
-function shortMeetName(name) {
+export function shortMeetName(name) {
   if (!name || typeof name !== "string") return "";
   return name.replace(/^\d{4}\s+[A-Z]{2}\s+/, "").trim();
 }
@@ -124,7 +124,10 @@ export function groupBestTimes(records, allRecords = []) {
       if (!historyMap.has(hKey)) historyMap.set(hKey, []);
       historyMap.get(hKey).push({
         hundredths: parsed.hundredths,
+        flag: parsed.flag,
         raw: r.swimTime,
+        id: r.swimTimeId ?? null,
+        meetId: r.meetId ?? null,
         swimDate: r.swimDate ?? null,
         age: r.swimmerAge ?? null,
         meetName: r.meetName ?? null,
@@ -142,7 +145,7 @@ export function groupBestTimes(records, allRecords = []) {
     // different pools.
     const key = canonicalDistance(r.distance, r.strokeName);
     if (!rows.has(key)) {
-      rows.set(key, { distance: key, stroke: r.strokeName, actual: {} });
+      rows.set(key, { distance: key, stroke: r.strokeName, actual: {}, history: {} });
     }
     const parsed = parseTime(r.swimTime);
     const hKey = `${r.strokeName}|${key}|${r.courseCode}`;
@@ -161,6 +164,8 @@ export function groupBestTimes(records, allRecords = []) {
         ? parsed.hundredths - prevSwim.hundredths
         : null;
 
+    // Every recorded swim in this event and course, for the progress report.
+    rows.get(key).history[r.courseCode] = hist;
     rows.get(key).actual[r.courseCode] = {
       hundredths: parsed.hundredths,
       flag: parsed.flag,
@@ -218,7 +223,7 @@ function cellFor(row, course) {
  * measure against — no gender chosen, an age past 18, or an event not in the
  * published set.
  */
-function cutsForCell(row, course, std) {
+export function cutsForCell(row, course, std) {
   if (!std?.data || !std.gender || !std.ageGroup) return null;
   return cutsFor(std.data, {
     gender: std.gender,
@@ -235,7 +240,7 @@ function cutsForCell(row, course, std) {
  *   - no published standard for the event → nothing to say
  *   - slower than B → say it as a target ("B −1.20"), not as a failing mark
  */
-function chipHtml(hundredths, cuts, context) {
+export function chipHtml(hundredths, cuts, context) {
   const got = levelFor(hundredths, cuts);
   if (!got) return "";
   return `<span class="lvl lvl-${got.level.toLowerCase()}" title="${esc(`${got.level} standard · ${context}`)}">${got.level}</span>`;
@@ -246,7 +251,7 @@ function chipHtml(hundredths, cuts, context) {
  * when there is no cut to chase: it reserves the same line in every primary
  * cell, so switching course doesn't leave the column ragged.
  */
-function gapHtml(hundredths, cuts) {
+export function gapHtml(hundredths, cuts) {
   const next = cuts === null ? null : nextCut(hundredths, cuts);
   if (!cuts) return `<span class="gap"></span>`;
   if (!next) {
@@ -426,7 +431,7 @@ const COURSE_LEN = { SCY: "25 yd", SCM: "25 m", LCM: "50 m" };
  * The board: ONE consolidated table, with stroke groups as full-width rows
  * inside it, plus toggleable metadata, motivational cuts, and meet cuts.
  */
-export function bestTimesTable(groups, primaryCourse, std = null, cols = null) {
+export function bestTimesTable(groups, primaryCourse, std = null, cols = null, open = null) {
   if (!groups.length) {
     return `<p class="empty-state">No times on record for this swimmer.</p>`;
   }
@@ -521,7 +526,9 @@ export function bestTimesTable(groups, primaryCourse, std = null, cols = null) {
             .map((m) => metaCellHtml(row, primaryCourse, m.key))
             .join("");
 
-          return `<tr class="ev-row" style="--i:${i++}">
+          // The whole row opens the event's progress report.
+          const isOpen = open?.stroke === row.stroke && open?.distance === row.distance;
+          return `<tr class="ev-row" data-stroke="${esc(row.stroke)}" data-distance="${row.distance}" tabindex="0" aria-expanded="${isOpen}" title="Progress report" style="--i:${i++}">
             <th scope="row" class="ev">${row.distance}${alt}</th>
             ${courseCells}${leftMetaCells}${motCells}${meetCells}${rightMetaCells}
           </tr>`;

@@ -19,7 +19,7 @@ opens straight onto him.
 - **/** focuses the search box
 - `?m=<memberId>` deep-links a swimmer
 
-Tests: `for t in convert api ui standards regional advise upstream; do node tests/$t.test.mjs; done`
+Tests: `for t in convert api ui standards regional advise progress history splits upstream; do node tests/$t.test.mjs; done`
 
 ## How it works
 
@@ -175,6 +175,83 @@ Power points are computed on USA Swimming's servers — the official calculator
 carries no formula — and every ranking endpoint is closed to anonymous callers.
 A lookalike score would get believed, so there isn't one.
 
+## Views
+
+Three tabs sit under the standards bar. They all follow the selected course and
+read the swim history from `GetAllTimesForFilters`, which needs a signed-in session.
+
+**Best times** is the board above.
+
+**By age** has one row per event and one column per age, newest age first. Each
+cell is the fastest recorded swim at that age, the standard it earned *for the age
+group the swimmer was in then*, and the drop from the previous age raced. A
+comparison that spans more than one year says so (`−2.30²ʸ`). A year with no race
+shows as a gap. Swims with no age on record cannot be placed and are counted in
+the footnote. Pick Girls or Boys to see the standards.
+
+**Meets** has one row per meet and one column per event, newest meet first (the
+flip button reverses it). Each swim shows its time, the drop against the previous
+swim of that event whichever meet it was at, and `PB` when it was the fastest to
+that date. Prelims and finals at one meet both appear, in order. Click a time to
+load its lap splits in a row under the meet.
+
+## Event progress report
+
+Click any row of the board or the By age table (or focus it and press Enter) to
+open that event's report in a drawer. Esc or **Close** dismisses it. It follows
+the selected course, so pressing 1 / 2 / 3 re-reads the same event in another
+pool.
+
+It shows the best time and its standard, then four figures in one row: swims on
+record, personal bests set, total drop since the first recorded swim, and the drop
+over the last 12 months. Below that is a time-against-date chart. Every swim is a
+dot, and the best-so-far is a step line that falls as the swimmer gets faster. A
+tick marks every half year. A dashed line shows the next motivational standard,
+and one more shows each meet cut not yet met. Each is named beside its time at the
+left edge. Then comes **every swim**, newest first, with its age, its drop against
+the swim before it, and a Splits button. Then the best of each season. A season
+runs 1 September to 31 August.
+
+**Focus for this event** is a second rule engine, in `app/progress.js`, next to
+the one above. It reads the event's own history and where the event sits among
+the swimmer's other events on the same ladder:
+
+| rule | what it looks for |
+|---|---|
+| fade | the back half of the best swim is 4% or more slower than the front half (needs splits) |
+| stall | no new best for 12 months, with at least 3 swims since, and still racing the event |
+| consistency | the typical recent swim is 2% or more slower than the best done before it |
+| endurance gap | a longer event (200 and up) a full standard behind the same stroke at 50-100 |
+| speed gap | a 50 or 100 a full standard behind the same stroke at 200 and up |
+| IM gap | the IM behind the four strokes, naming the weakest stroke |
+| behind / ahead of programme | the event against the mean of the other events, when no range rule fired |
+| reachable cut | the next cut is within 1.5% of the swim, with the pace of recent personal bests |
+
+Each finding carries its evidence and a "Try" line, such as threshold sets and
+broken swims for an endurance gap. The suggestions are starting points for a
+coach, not a training plan.
+
+"Compared to others" means the swimmer's own other events. No ranking endpoint
+is open to us, so a comparison with other swimmers would be invented.
+
+## Lap splits
+
+Fetched on demand from `GET /TimesSearch/AllTimes/SwimTime/{swimTimeId}` and
+cached per swim. The id is `swimTimeId` from the swim history, **not**
+`swimTimeRecognitionId` from the best times (a different id space). For events of
+200 and up the report also fetches the best swim's splits once, because the fade
+rule needs them. A sprint and an IM have no meaningful halves, so they skip it.
+
+**The payload shape is not verified.** `docs/API.md` shows `"splits": null` in the
+one sample on record, and no populated response has been captured. So
+`app/splits.js` assumes nothing: it accepts a few plausible shapes, then checks
+them against the swim's own final time. Running totals must end at the final time;
+lap times must add up to it; a missing last lap is added only when the distance
+divides evenly. Anything that fits none of these is shown as received, labelled
+"do not add up", with no analysis. If a real response turns out to look
+different, `normalizeSplits` is the one place to change, and `tests/splits.test.mjs`
+is where to add it.
+
 ## Hosting
 
 Production is a second Cloudflare Pages project, `swim.tanchao.xyz`. It does
@@ -215,6 +292,10 @@ app/standards/motivational.json the cut times (generated — see above)
 app/regional.js                 PNS meet qualification lookup
 app/standards/pns.json          current AGI and 14&U Champs cuts
 app/advise.js                   the focus rules (pure, deterministic)
+app/progress.js                 per-event history and its focus rules (pure)
+app/history.js                  age-best matrix and meets table data (pure)
+app/splits.js                   lap splits: verified normalisation, front/back half
+app/views.js                    report, age-best, meets, splits renderers
 app/ui.js                       pure render functions
 app/main.js                     state, URL, event wiring
 tools/build-standards.py        official PDF → motivational.json, once per edition
@@ -224,9 +305,8 @@ docs/API.md                     verified API contract
 
 ## Caveats
 
-- The public API exposes **no meet names or swim dates** for best times, so
-  there's no progression chart. Those endpoints (`GetSwimmerMeets`,
-  `GetAllTimesForFilters`) return 403 without a logged-in USA Swimming session.
+- `GetBestTimesForMember` carries no meet names or swim dates. The progress
+  report gets them from `GetAllTimesForFilters`, which needs a signed-in session.
 - Search matches current members by default. Uncheck the box for swimmers
   without a current registration.
 - Cross-check anything surprising against the **Official ↗** link.

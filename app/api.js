@@ -265,6 +265,16 @@ export async function allTimes(memberId) {
   return res ?? [];
 }
 
+/**
+ * One recorded swim, with its lap `splits`. The id is `swimTimeId` from
+ * GetAllTimesForFilters — not `swimTimeRecognitionId` from the best times, which
+ * is a different id space and returns another swimmer's swim.
+ * The payload shape of `splits` is not verified; see splits.js.
+ */
+export async function swimDetail(swimTimeId) {
+  return request(`/TimesSearch/AllTimes/SwimTime/${encodeURIComponent(swimTimeId)}`);
+}
+
 /** Full profile for one swimmer, incl. profilePicUrl. Public. */
 export async function getMember(memberId) {
   return request(`/TimesSearch/GetMember/${memberId}`);
