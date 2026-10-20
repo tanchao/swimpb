@@ -269,6 +269,60 @@ Also broken/unused:
 
 ---
 
+## Rankings leaderboard (needs a session)
+
+Verified 2026-10-20 with a signed-in session. The app uses three calls:
+
+```http
+GET  /SearchFilter/GetAllEvents      → [{eventId, eventCode, strokeName, distance, courseCode}]
+GET  /SearchFilter/GetSeasons        → [{reportingYearKey, seasonYear, season}]
+POST /TimesSearch/GetTopTimesLeaderBoard
+```
+
+The leaderboard body is the one the official site sends:
+
+```json
+{"bestTimesOnly":1,"eventId":2,"competitionGenderTypeId":1,"seasonKey":1156,
+ "startDate":null,"endDate":null,"minAge":10,"maxAge":10,
+ "lscCode":"PN","zoneCode":null,"timeStandardType":null,
+ "loggedInUserClubs":false,"teamUsaEligible":false}
+```
+
+- `competitionGenderTypeId`: 1 is boys, 2 is girls. The swimmer record has no gender.
+- `lscCode` and `zoneCode` are both `null` for a national list. Set one for LSC or zone.
+- `seasonKey: null` means all time. A season runs 9/1 to 8/31 and is named by the
+  ending year, so October 2026 is season 2027 (key 1156).
+- `minAge` and `maxAge` filter on the age **at the swim**, not the age today.
+- Events exist per course. A 500 free in yards and a 400 free in meters are
+  different `eventId`s.
+
+Each row has `eventRank`, `memberId`, `fullName`, `swimTime`, `swimTimeId`,
+`meetName`, `swimDate`, `swimmerAge`, `lscCode`, `clubCode` and `clubName`.
+
+**The list holds at most 100 rows.** It has one row per swimmer, sorted, with no
+paging and no club filter. So:
+
+- A rank is exact only when the swimmer is in the list.
+- A list with fewer than 100 rows is complete. Absence means no time in that filter.
+- A list with 100 rows that lacks the swimmer means "not in the top 100".
+- A club rank is derived from any list that holds the swimmer: every faster
+  clubmate is also in that list. The club code `UN` (unattached) is excluded.
+
+HTTP 404 from the leaderboard means no records. The client maps it to `[]`.
+
+The API has no zone field on a swimmer. The app maps LSC to zone with a table
+built from the server (61 LSCs, 4 zones, no conflicts); see `ZONE_LSCS` in
+`app/rank.js`.
+
+### IMX / IMR (not working)
+
+The SPA calls `/Ranking/Program/Type/Season`, `/Ranking/Program/Leaderboard` and
+`/Ranking/Program/{id}`. As of 2026-10-20 the leaderboard call returned HTTP 500
+for every body, method, header set and season tried, with a valid session. The
+app does not show IMX or IMR scores until that call works.
+
+---
+
 ## Dead ends worth recording
 
 `ajzxhub.net` — the site this project was modelled on — targets a path that no

@@ -4,6 +4,7 @@
 import { advise } from "./advise.js";
 import {
   ApiError,
+  allEvents,
   allTimes,
   bestTimes,
   clearSession,
@@ -11,14 +12,17 @@ import {
   loginWithCredentials,
   officialUrl,
   searchSwimmers,
+  seasons,
   session,
   setSession,
   swimDetail,
-} from "./api.js?v=4";
+  topTimes,
+} from "./api.js?v=5";
 import * as cache from "./cache.js";
 import { COURSES } from "./convert.js";
 import { ageBest, meetsByDate } from "./history.js";
 import { adviseEvent, progress } from "./progress.js";
+import { createRankings } from "./rankings.js";
 import { halves, normalizeSplits } from "./splits.js";
 import { loadRegionalStandards } from "./regional.js";
 import { ageGroupFor, loadStandards } from "./standards.js";
@@ -106,6 +110,20 @@ function noteApiError(err, fallback) {
   }
   status(err instanceof ApiError ? err.message : fallback, "error");
 }
+
+const rankings = createRankings({
+  api: { allEvents, seasons, topTimes },
+  cache,
+  host: el("rankings"),
+  context: () => ({
+    swimmer: state.swimmer,
+    gender: state.gender,
+    ageGroup: ageGroup(),
+    course: state.course,
+    groups: state.groups,
+  }),
+  onError: (err) => noteApiError(err, "Could not load rankings."),
+});
 
 function renderPinned() {
   el("pinned").innerHTML = ui.pinnedBar(cache.pinned(), state.swimmer?.memberId);
@@ -301,6 +319,8 @@ function renderTimes() {
     std && state.view === "best"
       ? ui.advicePanel(advise(state.groups, std, state.course), state.course, state.standards?.edition)
       : "";
+  // Course, gender, age group and the board all change through here.
+  rankings.refresh();
 }
 
 function setView(view) {
@@ -323,6 +343,7 @@ function renderSwimmer(meta = {}) {
     el("advice").innerHTML = "";
     state.open = null;
     renderReport();
+    rankings.refresh();
     return;
   }
   el("swimmer").innerHTML = ui.swimmerHeader(state.swimmer, {
@@ -383,6 +404,8 @@ async function doSearch(name) {
 
 async function selectSwimmer(swimmer) {
   state.swimmer = swimmer;
+  // Also runs after a sign-in, so a leaderboard that failed with 401 is retried.
+  rankings.retryErrors();
   state.bestRecords = [];
   state.allRecords = [];
   state.groups = [];

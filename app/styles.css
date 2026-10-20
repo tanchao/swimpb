@@ -1822,6 +1822,222 @@ tr.sp-row > td {
 
 .rp-table tr.sp-row td {
   padding: 0.3rem 0.4rem;
+
+/* Rankings --------------------------------------------------------------- */
+
+/* A panel like the focus list: prose-sized labels, mono only for the numbers. */
+.rank {
+  margin-top: 1.8rem;
+  padding: 1.1rem 1.2rem 0.9rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  background: var(--panel);
+}
+
+.rank-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.rank-title {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.rank-course {
+  font-size: 0.76rem;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+
+.rank-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.9rem 0 0.8rem;
+}
+
+.rank-controls select {
+  appearance: none;
+  background: var(--panel-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+}
+
+.rank-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 0.6rem;
+  margin: 0.4rem 0 1rem;
+}
+
+.rank-card {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  background: var(--panel-2);
+}
+
+.rank-card.ranked {
+  border-color: var(--rule-hi);
+}
+
+.rank-scope {
+  font-family: var(--display);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.rank-num {
+  font-family: var(--mono);
+  font-feature-settings: "tnum" 1;
+  font-size: 1.5rem;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+
+.rank-card.ranked .rank-num {
+  color: var(--accent);
+}
+
+.rank-sub {
+  font-family: var(--mono);
+  font-feature-settings: "tnum" 1;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+.rank-card.error .rank-sub {
+  color: var(--fl);
+}
+
+.rank-tabs {
+  margin: 0 0 0.6rem;
+}
+
+.rank-note {
+  margin: 0.4rem 0 0.8rem;
+  font-size: 0.83rem;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.rank-note.error {
+  color: var(--fl);
+}
+
+.rank-foot {
+  margin: 0.9rem 0 0;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+.rank-wrap {
+  max-height: 28rem;
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+}
+
+table.rank-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.rank-table th,
+.rank-table td {
+  padding: 0.35rem 0.6rem;
+  text-align: left;
+  border-top: 1px solid var(--rule);
+  white-space: nowrap;
+}
+
+.rank-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel-2);
+  border-top: 0;
+  font-family: var(--display);
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.rank-table .rk,
+.rank-table .ag,
+.rank-table .tm,
+.rank-table .dt {
+  font-family: var(--mono);
+  font-feature-settings: "tnum" 1;
+  font-style: normal;
+}
+
+.rank-table .tm {
+  text-align: right;
+}
+
+.rank-table .who-name {
+  display: block;
+  color: var(--ink);
+}
+
+.rank-table .who-club {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--ink-3);
+}
+
+.rank-table .mt {
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink-2);
+}
+
+.rank-table tr.me td {
+  background: var(--accent-dim);
+  box-shadow: inset 0 0 0 0 var(--accent);
+}
+
+.rank-table tr.me td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+@media (max-width: 40rem) {
+  .rank-table .mt,
+  .rank-table .dt {
+    display: none;
+  }
 }
 
 /* Staggered reveal — one orchestrated load, not scattered micro-motion. */

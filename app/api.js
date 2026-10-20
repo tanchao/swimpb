@@ -286,6 +286,27 @@ export async function lscs() {
   return res ?? [];
 }
 
+/** Every event the site ranks, with its id: individual and relay, all courses. */
+export async function allEvents() {
+  const res = await request("/SearchFilter/GetAllEvents");
+  return res ?? [];
+}
+
+/** Seasons (9/1 to 8/31) with the `reportingYearKey` the leaderboard filters on. */
+export async function seasons() {
+  const res = await request("/SearchFilter/GetSeasons");
+  return res ?? [];
+}
+
+/**
+ * The fastest swimmers for one event and filter set. At most 100 rows, sorted by
+ * time, one row per swimmer. See app/rank.js for the body.
+ */
+export async function topTimes(body) {
+  const res = await request("/TimesSearch/GetTopTimesLeaderBoard", body);
+  return res ?? [];
+}
+
 /** Deep link to this swimmer on the official site, for cross-checking. */
 export function officialUrl(memberId) {
   return `https://data.usaswimming.org/search/athlete/${memberId}/best-times`;

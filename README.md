@@ -170,10 +170,24 @@ It is deliberately a rule engine, not generated prose. There is no backend and n
 model behind it, so the same times always produce the same list, offline and
 instantly, and every line shows its evidence so you can disagree with it.
 
-**What it will not tell you.** No power-point total, no IMX/IMR score, no rank.
+**What it will not tell you.** No power-point total and no IMX/IMR score.
 Power points are computed on USA Swimming's servers — the official calculator
-carries no formula — and every ranking endpoint is closed to anonymous callers.
-A lookalike score would get believed, so there isn't one.
+carries no formula. A lookalike score would get believed, so there isn't one.
+The Focus list is also not a rank; see Rankings below.
+
+## Rankings
+
+Under Focus, a Rankings panel (closed by default; it makes no request until you
+open it) shows where a swimmer's time stands in the swimmer's club, LSC, zone and
+the US, and a browseable leaderboard for any event, gender, age and season.
+
+It needs a signed-in session. USA Swimming returns only the **fastest 100
+swimmers** per list, so a rank appears only when the swimmer is in that list.
+Otherwise the card says "Not in the top 100" and shows the 100th time. It never
+guesses. The club rank is counted from clubmates in the list; unattached
+swimmers have none. The zone comes from a table of LSCs built from the server.
+The leaderboard filters on the age at the swim, not the age today. Contract
+details are in `docs/API.md`.
 
 ## Views
 
@@ -296,6 +310,9 @@ app/progress.js                 per-event history and its focus rules (pure)
 app/history.js                  age-best matrix and meets table data (pure)
 app/splits.js                   lap splits: verified normalisation, front/back half
 app/views.js                    report, age-best, meets, splits renderers
+app/rank.js                     rankings logic: request body, zones, standings (pure)
+app/rankings.js                 rankings controller: state, fetching, caching
+app/rankviews.js                rankings panel render
 app/ui.js                       pure render functions
 app/main.js                     state, URL, event wiring
 tools/build-standards.py        official PDF → motivational.json, once per edition
