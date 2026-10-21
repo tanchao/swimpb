@@ -78,7 +78,28 @@ function setup({ ctx = {}, topTimes, events = EVENTS, store = new Map() } = {}) 
     ],
     ...ctx,
   };
-  const host = { innerHTML: "", addEventListener() {} };
+  const listeners = {};
+  const host = {
+    innerHTML: "",
+    addEventListener(type, fn) {
+      listeners[type] = listeners[type] || [];
+      listeners[type].push(fn);
+    },
+    click(target, eventInit = {}) {
+      const event = {
+        type: "click",
+        target,
+        button: 0,
+        defaultPrevented: false,
+        preventDefault() {
+          this.defaultPrevented = true;
+        },
+        ...eventInit,
+      };
+      for (const fn of listeners.click || []) fn(event);
+      return event;
+    },
+  };
   const api = {
     async allEvents() {
       calls.allEvents++;
@@ -112,8 +133,17 @@ function setup({ ctx = {}, topTimes, events = EVENTS, store = new Map() } = {}) 
     pref: (k, d) => (prefs.has(k) ? prefs.get(k) : d),
     setPref: (k, v) => prefs.set(k, v),
   };
-  const ctl = createRankings({ api, cache, context: () => context, onError: (e) => errors.push(e), host, now: NOW });
-  return { ctl, calls, errors, host, context, store, prefs };
+  const navActions = [];
+  const ctl = createRankings({
+    api,
+    cache,
+    context: () => context,
+    onError: (e) => errors.push(e),
+    onNavigate: (a) => navActions.push(a),
+    host,
+    now: NOW,
+  });
+  return { ctl, calls, errors, host, context, store, prefs, navActions };
 }
 
 await checkAsync("a hidden column and a closed page make no request", async () => {
@@ -429,6 +459,41 @@ await checkAsync("a swimmer with no LSC yet makes no list request", async () => 
   assert.match(host.innerHTML, /No LSC/);
   assert.equal(ctl.boardCells()["Freestyle|100"].team.text, "—");
   assert.equal(ctl.boardCells()["Freestyle|100"].lsc.text, "—");
+});
+
+await checkAsync("clicking a swimmer name in ranking dispatches swimmer navigation", async () => {
+  const { ctl, host, navActions } = setup();
+  ctl.act({ type: "open", stroke: "Freestyle", distance: 100, scope: "club" });
+  await flush();
+  assert.match(host.innerHTML, /<a class="who-name" href="\?m=C1" data-member="C1">Swimmer C1<\/a>/);
+
+  const mockLink = {
+    matches: (sel) => sel === "a[data-member]",
+    closest: (sel) => (sel === "a[data-member]" ? mockLink : null),
+    dataset: { member: "C1" },
+  };
+
+  // Normal click
+  const ev = host.click(mockLink);
+  assert.equal(ev.defaultPrevented, true);
+  assert.equal(navActions.length, 1);
+  assert.deepEqual(navActions[0], {
+    type: "swimmer",
+    swimmer: {
+      memberId: "C1",
+      fullName: "Swimmer C1",
+      clubName: "BC Swim Club",
+      clubCode: "BC",
+      lscCode: "PN",
+      swimmerAge: 10,
+    },
+  });
+
+  // Meta click (open in new tab) should not navigate or prevent default
+  navActions.length = 0;
+  const metaEv = host.click(mockLink, { metaKey: true });
+  assert.equal(metaEv.defaultPrevented, false);
+  assert.equal(navActions.length, 0);
 });
 
 console.log(`\n${pass} passed, ${fails.length} failed`);

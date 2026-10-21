@@ -75,7 +75,7 @@ function tabsFor(swimmer) {
  *                course:string, groups:Array,
  *                ranks:{team:boolean, lsc:boolean, zone:boolean, us:boolean}}} deps.context
  * @param {(err:Error) => void} deps.onError
- * @param {(action:{type:string, scope?:string}) => void} [deps.onNavigate]
+ * @param {(action:{type:string, scope?:string, swimmer?:object}) => void} [deps.onNavigate]
  * @param {(cells:object) => void} [deps.onBoard]
  * @param {{innerHTML:string, addEventListener?:Function, querySelector?:Function}} deps.host
  * @param {() => Date} [deps.now]
@@ -534,12 +534,36 @@ export function createRankings({ api, cache, context, onError, onNavigate, onBoa
     refresh();
   }
 
+  function swimmerInView(memberId) {
+    const m = model();
+    const hit = m?.table?.rows?.find((r) => r.memberId === memberId);
+    if (hit) {
+      return {
+        memberId: hit.memberId,
+        fullName: hit.fullName,
+        clubName: hit.clubName,
+        clubCode: hit.clubCode,
+        lscCode: hit.lscCode,
+        swimmerAge: hit.swimmerAge,
+      };
+    }
+    return null;
+  }
+
   host.addEventListener?.("click", (e) => {
     const hit = (sel) => e.target.closest?.(sel);
     let b;
     if (hit("[data-rank-back]")) act({ type: "close" }, { fromHost: true });
     else if ((b = hit("[data-rank-scope]"))) act({ type: "scope", value: b.dataset.rankScope }, { fromHost: true });
     else if (hit("[data-rank-retry]")) act({ type: "retry" }, { fromHost: true });
+    else if ((b = hit("a[data-member]"))) {
+      if (!e.defaultPrevented && e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        const memberId = b.dataset.member;
+        const swimmer = swimmerInView(memberId);
+        onNavigate?.({ type: "swimmer", swimmer: swimmer ?? { memberId } });
+      }
+    }
   });
   host.addEventListener?.("change", (e) => {
     const t = e.target;

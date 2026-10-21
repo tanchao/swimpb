@@ -756,19 +756,14 @@ export function courseToggle(primary) {
  * against, plus the column visibility pills.
  */
 export function standardsBar({
-  course = "SCY",
   gender,
   ageGroup,
   autoGroup,
   age,
-  edition,
-  regional,
   ready,
   cols = null,
 }) {
   if (!ready) return "";
-
-  const courseSeg = courseToggle(course);
 
   const seg = GENDERS.map(
     (g) =>
@@ -796,6 +791,16 @@ export function standardsBar({
         : "Choose an age group to show standards.";
   }
 
+  return `<div class="std-bar">
+    <span class="std-label">Standards</span>
+    <div class="seg" id="gender-toggle">${seg}</div>
+    <select id="age-group"${ageGroup ? ` class="on"` : ""} aria-label="Age group">${opts}</select>
+    ${note ? `<span class="std-note">${esc(note)}</span>` : ""}
+  </div>${cols ? columnToggleBar(cols) : ""}`;
+}
+
+export function regionalNotes(regional) {
+  if (!regional) return "";
   const meetEditions = (regional?.meets ?? [])
     .map(
       (meet) =>
@@ -803,26 +808,21 @@ export function standardsBar({
     )
     .join(" · ");
   const unavailable = (regional?.unavailable ?? [])
-    .map((meet) => `${meet.label} ${meet.edition} — ${meet.reason}`)
+    .map((meet) => `${esc(meet.label)} ${esc(meet.edition)} — ${esc(meet.reason)}`)
     .join(" · ");
-
-  return `<div class="std-bar">
-    <span class="std-label">Standards</span>
-    <div class="seg" id="std-course-toggle">${courseSeg}</div>
-    <div class="seg" id="gender-toggle">${seg}</div>
-    <select id="age-group" aria-label="Age group">${opts}</select>
-    ${edition ? `<span class="std-edition" title="USA Swimming National Age Group Motivational Standards">${esc(edition)}</span>` : ""}
-    ${note ? `<span class="std-note">${esc(note)}</span>` : ""}
-    ${meetEditions ? `<span class="meet-editions">${meetEditions}</span>` : ""}
-    ${unavailable ? `<span class="std-note">${esc(unavailable)}</span>` : ""}
-  </div>${cols ? columnToggleBar(cols) : ""}`;
+  return [meetEditions, unavailable].filter(Boolean).join(" · ");
 }
 
 export function swimmerHeader(s, meta) {
   const bits = [s.clubName, s.lscCode, s.swimmerAge != null ? `age ${s.swimmerAge}` : null]
     .filter(Boolean)
-    .map(esc)
-    .join(" · ");
+    .map(esc);
+  if (meta.edition) {
+    bits.push(
+      `<span class="sw-edition" title="USA Swimming National Age Group Motivational Standards">${esc(meta.edition)}</span>`,
+    );
+  }
+  const line = bits.join(" · ");
   // The photo is optional and third-party; if it fails, drop it rather than
   // leaving a broken-image box in the header.
   const avatar = s.profilePicUrl
@@ -832,7 +832,7 @@ export function swimmerHeader(s, meta) {
     ${avatar}
     <div class="sw-ident">
       <h2>${esc(s.fullName || s.shortName || "Swimmer")}</h2>
-      <p class="sw-sub">${bits || "&nbsp;"}${meta.freshness ? ` <span class="freshness">· ${esc(meta.freshness)}</span>` : ""}</p>
+      <p class="sw-sub">${line || "&nbsp;"}${meta.freshness ? ` <span class="freshness">· ${esc(meta.freshness)}</span>` : ""}</p>
     </div>
     <div class="sw-actions">
       <button id="pin-btn" class="ghost${meta.pinned ? " on" : ""}">${meta.pinned ? "★ Saved" : "☆ Save"}</button>

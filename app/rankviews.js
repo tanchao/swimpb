@@ -47,9 +47,12 @@ function leaderboard(table, scope) {
         scope === "club"
           ? ""
           : `<span class="who-club">${esc(r.clubName)}${r.lscCode ? ` · ${esc(r.lscCode)}` : ""}</span>`;
+      const name = r.memberId
+        ? `<a class="who-name" href="?m=${esc(r.memberId)}" data-member="${esc(r.memberId)}">${esc(r.fullName || "Swimmer")}</a>`
+        : `<span class="who-name">${esc(r.fullName || "Swimmer")}</span>`;
       return `<tr class="${me ? "me" : ""}"${me ? ' aria-current="true"' : ""}>
         <td class="rk">${esc(r.eventRank)}</td>
-        <td class="who"><span class="who-name">${esc(r.fullName)}</span>${club}</td>
+        <td class="who">${name}${club}</td>
         <td class="ag">${esc(r.swimmerAge ?? "")}</td>
         <td class="tm">${esc(r.swimTime)}</td>
         <td class="mt" title="${esc(r.meetName)}">${esc(shortMeet(r.meetName))}</td>
