@@ -925,13 +925,6 @@ sup.flag {
   background: var(--panel);
 }
 
-.seg .course-btn {
-  font-size: 0.78rem;
-  letter-spacing: 0.08em;
-  padding: 0.3rem 0.65rem;
-  border-radius: 0;
-}
-
 .seg-btn {
   appearance: none;
   border: 0;
@@ -964,21 +957,36 @@ sup.flag {
 
 .std-bar select {
   appearance: none;
-  background: var(--panel);
+  background-color: var(--panel);
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position:
+    calc(100% - 0.7rem) 55%,
+    calc(100% - 0.46rem) 55%;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
   border: 1px solid var(--rule);
   border-radius: var(--r);
   color: var(--ink-2);
   font-family: var(--display);
   font-size: 0.78rem;
   letter-spacing: 0.06em;
-  padding: 0.3rem 0.6rem;
+  padding: 0.3rem 1.15rem 0.3rem 0.6rem;
   cursor: pointer;
 }
 
-.std-edition {
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  color: var(--ink-3);
+.std-bar select.on {
+  background-color: var(--accent);
+  border-color: var(--accent);
+  color: #04121b;
+  font-weight: 600;
+}
+
+:root[data-theme="light"] .std-bar select.on {
+  color: #fff;
+}
+
+.sw-edition {
   cursor: help;
 }
 
@@ -987,8 +995,6 @@ sup.flag {
 }
 
 .meet-editions {
-  flex-basis: 100%;
-  font-size: 0.72rem;
   color: var(--ink-3);
 }
 
@@ -1970,8 +1976,23 @@ table.rank-table {
 }
 
 .rank-table .who-name {
-  display: block;
+  display: inline-block;
   color: var(--ink);
+  text-decoration: none;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: color 0.12s var(--ease);
+}
+
+.rank-table a.who-name:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.rank-table a.who-name:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .rank-table .who-club {
@@ -2035,10 +2056,32 @@ table.rank-table {
 
 footer.legend {
   margin-top: 2.5rem;
-  padding-top: 1.1rem;
+  padding-top: 0.8rem;
   border-top: 1px solid var(--rule);
   color: var(--ink-3);
   font-size: 0.78rem;
+}
+
+footer.legend details > summary {
+  cursor: pointer;
+  font-family: var(--display);
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  user-select: none;
+}
+
+footer.legend details > summary:hover {
+  color: var(--ink-2);
+}
+
+footer.legend details[open] > summary {
+  margin-bottom: 0.6rem;
+}
+
+footer.legend .legend-body {
   display: grid;
   gap: 0.5rem;
 }

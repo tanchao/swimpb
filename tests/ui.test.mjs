@@ -15,7 +15,9 @@ import {
   sessionBar,
   groupBestTimes,
   pinnedBar,
+  regionalNotes,
   standardsBar,
+  swimmerHeader,
   swimmerList,
 } from "../app/ui.js";
 
@@ -250,11 +252,12 @@ check("standards bar asks for a gender and says why", () => {
   assert.ok(/doesn.t say/.test(html), "should explain the API has no gender");
 });
 
-check("standards bar marks the chosen gender and offers the auto age group", () => {
-  const html = standardsBar({ gender: "boys", ageGroup: "13-14", autoGroup: "13-14", age: 14, edition: "2025-2028", ready: true });
+check("standards bar marks the chosen gender and the active age group", () => {
+  const html = standardsBar({ gender: "boys", ageGroup: "13-14", autoGroup: "13-14", age: 14, ready: true });
   assert.equal((html.match(/seg-btn on/g) ?? []).length, 1);
   assert.ok(html.includes("Auto — 13-14"));
-  assert.ok(html.includes("2025-2028"));
+  assert.match(html, /<select id="age-group" class="on"/);
+  assert.ok(!html.includes("course-btn"));
 });
 
 check("standards bar explains an out-of-range age instead of going blank", () => {
@@ -263,12 +266,25 @@ check("standards bar explains an out-of-range age instead of going blank", () =>
   assert.ok(html.includes("29"));
 });
 
-check("standards bar escapes the edition string", () => {
-  const html = standardsBar({ gender: "girls", ageGroup: "13-14", autoGroup: "13-14", age: 13, edition: '<script>bad()</script>', ready: true });
+check("swimmer header puts the standards quad after the age", () => {
+  const html = swimmerHeader(
+    { fullName: "Shuyi Tan", clubName: "Issaquah Swim Team", lscCode: "PN", swimmerAge: 9 },
+    { officialUrl: "https://example.com", edition: "2024-2028", freshness: "Updated." },
+  );
+  const sub = /<p class="sw-sub">([\s\S]*?)<\/p>/.exec(html)?.[1] ?? "";
+  assert.ok(sub.indexOf("age 9") !== -1 && sub.indexOf("age 9") < sub.indexOf("2024-2028"));
+  assert.ok(sub.indexOf("2024-2028") < sub.indexOf("freshness"));
+});
+
+check("swimmer header escapes the edition string", () => {
+  const html = swimmerHeader(
+    { fullName: "A", swimmerAge: 9 },
+    { officialUrl: "https://example.com", edition: "<script>bad()</script>" },
+  );
   assert.ok(!html.includes("<script>"));
 });
 
-check("standards bar names meet editions and unpublished Regionals", () => {
+check("standards bar does not include meet editions and unpublished Regionals", () => {
   const html = standardsBar({
     gender: "girls",
     ageGroup: "13-14",
@@ -280,6 +296,15 @@ check("standards bar names meet editions and unpublished Regionals", () => {
       meets: [{ label: "AGI", edition: "2026-27", source: "https://example.com/agi" }],
       unavailable: [{ label: "NW Regionals", edition: "2027", reason: "Cuts not published by PNS" }],
     },
+  });
+  assert.ok(!html.includes("AGI 2026-27"));
+  assert.ok(!html.includes("NW Regionals 2027 — Cuts not published by PNS"));
+});
+
+check("regionalNotes formats meet editions and unpublished notices", () => {
+  const html = regionalNotes({
+    meets: [{ label: "AGI", edition: "2026-27", source: "https://example.com/agi" }],
+    unavailable: [{ label: "NW Regionals", edition: "2027", reason: "Cuts not published by PNS" }],
   });
   assert.ok(html.includes("AGI 2026-27"));
   assert.ok(html.includes("NW Regionals 2027 — Cuts not published by PNS"));
@@ -532,7 +557,7 @@ check("toggling columns off excludes them from the table", () => {
   assert.ok(!html.includes("26-09-27"), "date stays off by default");
 });
 
-check("column toggle bar matches table order andstandardsBar includes course toggle", () => {
+check("column toggle bar matches table order and standards bar leaves course to the header", () => {
   const html = columnToggleBar(DEFAULT_COLS);
   const keys = [...html.matchAll(/data-toggle-col="(\w+)"/g)].map((m) => m[1]);
   assert.deepEqual(keys, ["team", "lsc", "zone", "us", "age", "pts", "mot", "meets", "date", "meet"]);
@@ -553,7 +578,8 @@ check("column toggle bar matches table order andstandardsBar includes course tog
     ready: true,
     cols: DEFAULT_COLS,
   });
-  assert.match(stdHtml, /class="course-btn on"[^>]*data-course="LCM"/, "course toggle in standardsBar highlights LCM");
+  assert.ok(!stdHtml.includes("course-btn"), "course toggle is not repeated on the standards row");
+  assert.match(stdHtml, /<select id="age-group" class="on"/, "auto age group is marked selected");
 });
 
 check("team and LSC ranks sit next to the time and open that event", () => {

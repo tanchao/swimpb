@@ -137,6 +137,18 @@ const rankings = createRankings({
   onNavigate: (action) => {
     if (action.type === "close") closeRank({ alreadyClosed: true });
     else if (action.type === "scope") rememberRankScope(action.scope);
+    else if (action.type === "swimmer") {
+      if (state.swimmer?.memberId === action.swimmer.memberId) {
+        closeRank();
+      } else {
+        if (state.rank) {
+          state.rank = null;
+          applyRankChrome();
+          rankings.act({ type: "close" });
+        }
+        selectSwimmer(action.swimmer, { historyMode: "push" });
+      }
+    }
   },
   onError: (err) => noteApiError(err, "Could not load rankings."),
 });
@@ -167,16 +179,20 @@ function renderResults() {
   el("results").innerHTML = ui.swimmerList(state.results);
 }
 
+function renderRegionalNotes() {
+  const target = el("legend-regional");
+  if (target && state.regionalStandards) {
+    target.innerHTML = ui.regionalNotes(state.regionalStandards);
+  }
+}
+
 function renderStandards() {
   el("standards").innerHTML = state.swimmer
     ? ui.standardsBar({
-        course: state.course,
         gender: state.gender,
         ageGroup: ageGroup(),
         autoGroup: ageGroupFor(state.swimmer.swimmerAge),
         age: state.swimmer.swimmerAge ?? null,
-        edition: state.standards?.edition ?? null,
-        regional: state.regionalStandards,
         ready: Boolean(state.standards),
         cols: state.view === "best" ? state.cols : null,
       })
@@ -413,6 +429,15 @@ function setView(view) {
   renderTimes();
 }
 
+function swimmerViewMeta(freshness = "") {
+  return {
+    pinned: cache.isPinned(state.swimmer.memberId),
+    officialUrl: officialUrl(state.swimmer.memberId),
+    freshness,
+    edition: state.standards?.edition ?? "",
+  };
+}
+
 function renderSwimmer(meta = {}) {
   if (!state.swimmer) {
     el("swimmer").innerHTML = "";
@@ -425,11 +450,7 @@ function renderSwimmer(meta = {}) {
     rankings.refresh();
     return;
   }
-  el("swimmer").innerHTML = ui.swimmerHeader(state.swimmer, {
-    pinned: cache.isPinned(state.swimmer.memberId),
-    officialUrl: officialUrl(state.swimmer.memberId),
-    freshness: meta.freshness ?? "",
-  });
+  el("swimmer").innerHTML = ui.swimmerHeader(state.swimmer, swimmerViewMeta(meta.freshness ?? ""));
   renderViews();
   renderStandards();
   renderTimes();
@@ -475,7 +496,7 @@ async function doSearch(name) {
     status("");
     renderResults();
     // A single unambiguous match is almost always the one you meant.
-    if (list.length === 1) selectSwimmer(list[0]);
+    if (list.length === 1) selectSwimmer(list[0], { historyMode: "push" });
   } catch (err) {
     noteApiError(err, "Search failed.");
   }
@@ -544,12 +565,13 @@ function rememberRankScope(scope) {
   history.replaceState({ rank: mark }, "", url);
 }
 
-async function selectSwimmer(swimmer) {
+async function selectSwimmer(swimmer, { historyMode = "replace" } = {}) {
   if (state.rank && state.swimmer && state.swimmer.memberId !== swimmer.memberId) {
     state.rank = null;
     applyRankChrome();
     rankings.act({ type: "close" });
   }
+  const switching = state.swimmer && state.swimmer.memberId !== swimmer.memberId;
   state.swimmer = swimmer;
   // Also runs after a sign-in, so a leaderboard that failed with 401 is retried.
   rankings.retryErrors();
@@ -574,6 +596,10 @@ async function selectSwimmer(swimmer) {
     state.standards = data;
     maybeAutoDetectGender();
     if (state.swimmer) {
+      // The quad is printed next to the age, so the header has to pick it up
+      // when the table arrives after the first paint.
+      const freshness = document.querySelector("#swimmer .freshness")?.textContent?.replace(/^·\s*/, "") ?? "";
+      el("swimmer").innerHTML = ui.swimmerHeader(state.swimmer, swimmerViewMeta(freshness));
       renderStandards();
       renderTimes();
     }
@@ -581,6 +607,7 @@ async function selectSwimmer(swimmer) {
   loadRegionalStandards().then((data) => {
     if (!data || state.regionalStandards) return;
     state.regionalStandards = data;
+    renderRegionalNotes();
     if (state.swimmer) {
       renderStandards();
       renderTimes();
@@ -593,8 +620,12 @@ async function selectSwimmer(swimmer) {
     url.searchParams.delete("rank");
     url.searchParams.delete("scope");
   }
-  const mark = state.rank ? (history.state?.rank === "pushed" ? "pushed" : "replaced") : null;
-  history.replaceState(mark ? { rank: mark } : null, "", url);
+  if (historyMode === "push" && switching) {
+    history.pushState({ swimmer: swimmer.memberId }, "", url);
+  } else if (historyMode === "replace" || (historyMode === "push" && !switching)) {
+    const mark = state.rank ? (history.state?.rank === "pushed" ? "pushed" : "replaced") : null;
+    history.replaceState(mark ? { rank: mark } : null, "", url);
+  }
 
   status("Loading personal bests…");
   renderSwimmer({ freshness: "" });
@@ -802,11 +833,6 @@ function retryPending() {
 }
 
 el("standards").addEventListener("click", (e) => {
-  const courseBtn = e.target.closest(".course-btn");
-  if (courseBtn) {
-    setCourse(courseBtn.dataset.course);
-    return;
-  }
   const btn = e.target.closest(".seg-btn");
   if (btn) {
     setStandardsSet({ gender: btn.dataset.gender });
@@ -881,8 +907,9 @@ document.addEventListener("click", (e) => {
   const known =
     state.results?.find((s) => s.memberId === id) ??
     cache.pinned().find((s) => s.memberId === id) ??
-    cache.getEntry(`swimmer:${id}`)?.data;
-  if (known) selectSwimmer(known);
+    cache.getEntry(`swimmer:${id}`)?.data ??
+    { memberId: id };
+  selectSwimmer(known, { historyMode: "push" });
 });
 
 el("swimmer").addEventListener("click", (e) => {
@@ -932,6 +959,15 @@ function boot() {
   renderCourse();
   renderSession();
   renderPinned();
+  loadRegionalStandards().then((data) => {
+    if (!data || state.regionalStandards) return;
+    state.regionalStandards = data;
+    renderRegionalNotes();
+    if (state.swimmer) {
+      renderStandards();
+      renderTimes();
+    }
+  });
 
   // Deep link wins; otherwise fall back to the most recently saved swimmer so
   // the common case — checking on your own kid — needs zero interaction.
@@ -950,6 +986,17 @@ function boot() {
 }
 
 window.addEventListener("popstate", () => {
+  const currentId = new URLSearchParams(location.search).get("m");
+  if (currentId && (!state.swimmer || state.swimmer.memberId !== currentId)) {
+    const target =
+      cache.getEntry(`swimmer:${currentId}`)?.data ??
+      cache.pinned().find((s) => s.memberId === currentId) ?? { memberId: currentId };
+    const pending = rankFromUrl();
+    if (pending) state.rank = pending;
+    selectSwimmer(target, { historyMode: "none" });
+    if (pending) openRank(pending.stroke, pending.distance, pending.scope, { historyMode: "none" });
+    return;
+  }
   if (!state.swimmer) return;
   const pending = rankFromUrl();
   if (pending) openRank(pending.stroke, pending.distance, pending.scope, { historyMode: "none" });

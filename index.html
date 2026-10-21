@@ -11,7 +11,7 @@
       href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="app/styles.css?v=11" />
+    <link rel="stylesheet" href="app/styles.css?v=12" />
   </head>
   <body>
     <div class="wrap">
@@ -56,34 +56,44 @@
       <div id="rankings"></div>
 
       <footer class="legend">
-        <p>
-          <span class="swatch">1:02.14</span> — a real swim on record.
-          <span class="swatch conv">~1:02.14</span> — an estimate converted from another course;
-          hover for the source. A converted time is never a personal best.
-          <span class="swatch">·</span> — nothing to show.
-        </p>
-        <p>
-          <span class="lvl lvl-aa">AA</span> — the USA Swimming motivational standard that
-          time has reached, for the selected age group and gender. Under the highlighted
-          column, <span class="swatch">AAA −0.41</span> is how much has to come off to reach
-          the next one. Converted estimates get no standard, because only a real swim can
-          achieve one.
-        </p>
-        <p>
-          <span class="qual met"><span class="qual-meet">AGI</span> ✓</span> — qualified
-          for that PNS meet in the highlighted course.
-          <span class="qual"><span class="qual-meet">Champs</span>
-          <span class="qual-gap">−0.41</span></span> — time still needed. Meet qualification
-          uses recorded swims only, never converted estimates.
-        </p>
-        <p>
-          Live from USA Swimming's public Data Hub API, cached in this browser.
-          Conversion uses the factor set published by Colorado Swimming. Motivational
-          standards ship with the app — USA Swimming publishes no public endpoint for them.
-        </p>
+        <details id="legend-details">
+          <summary>Legend &amp; notes</summary>
+          <div class="legend-body">
+            <p>
+              <span class="swatch">1:02.14</span> — a real swim on record.
+              <span class="swatch conv">~1:02.14</span> — an estimate converted from another course;
+              hover for the source. A converted time is never a personal best.
+              <span class="swatch">·</span> — nothing to show.
+            </p>
+            <p>
+              <span class="lvl lvl-aa">AA</span> — the USA Swimming motivational standard that
+              time has reached, for the selected age group and gender. Under the highlighted
+              column, <span class="swatch">AAA −0.41</span> is how much has to come off to reach
+              the next one. Converted estimates get no standard, because only a real swim can
+              achieve one.
+            </p>
+            <p>
+              <span class="qual met"><span class="qual-meet">AGI</span> ✓</span> — qualified
+              for that PNS meet in the highlighted course.
+              <span class="qual"><span class="qual-meet">Champs</span>
+              <span class="qual-gap">−0.41</span></span> — time still needed. Meet qualification
+              uses recorded swims only, never converted estimates.
+            </p>
+            <p id="legend-regional" class="meet-editions">
+              <a href="https://www.pns.org/pnws2/UserFiles/Image/QuickUpload/age-group-invitational-standards_015640.pdf" target="_blank" rel="noopener">AGI 2026-27 ↗</a> ·
+              <a href="https://www.pns.org/pnws2/UserFiles/Image/QuickUpload/2026-14u-sc-champs-standards_019804.pdf" target="_blank" rel="noopener">14&amp;U Champs 2026 SC ↗</a> ·
+              NW Regionals 2027 — Cuts not published by PNS
+            </p>
+            <p>
+              Live from USA Swimming's public Data Hub API, cached in this browser.
+              Conversion uses the factor set published by Colorado Swimming. Motivational
+              standards ship with the app — USA Swimming publishes no public endpoint for them.
+            </p>
+          </div>
+        </details>
       </footer>
     </div>
 
-    <script type="module" src="app/main.js?v=15"></script>
+    <script type="module" src="app/main.js?v=16"></script>
   </body>
 </html>
