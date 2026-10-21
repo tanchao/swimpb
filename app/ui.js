@@ -41,12 +41,24 @@ const ABBR_TO_STROKE = {
 
 /** Toggleable columns in the consolidated Personal Bests table. */
 export const TABLE_COLUMNS = [
+  { key: "team", label: "Team", short: "Team", defaultOn: true },
+  { key: "lsc", label: "LSC", short: "LSC", defaultOn: true },
+  { key: "zone", label: "Zone", short: "Zone", defaultOn: false },
+  { key: "us", label: "US", short: "US", defaultOn: false },
   { key: "age", label: "Age", short: "Age", defaultOn: true },
   { key: "pts", label: "Power Pts", short: "Pts", defaultOn: true },
   { key: "mot", label: "B–AAAA Cuts", short: "B–AAAA", defaultOn: true },
   { key: "meets", label: "Meet Cuts", short: "Meet Cuts", defaultOn: true },
-  { key: "date", label: "Date", short: "Date", defaultOn: true },
+  { key: "date", label: "Date", short: "Date", defaultOn: false },
   { key: "meet", label: "Meet", short: "Meet", defaultOn: false },
+];
+
+/** Rank columns, in table order. `scope` is the ranking page each cell opens. */
+const RANK_COLS = [
+  { key: "team", label: "Team", scope: "club", tip: "Team rank this season, at the age of the swim. Click to open the list." },
+  { key: "lsc", label: "LSC", scope: "lsc", tip: "LSC rank this season, at the age of the swim. Click to open the list." },
+  { key: "zone", label: "Zone", scope: "zone", tip: "Zone rank this season, at the age of the swim. Click to open the list." },
+  { key: "us", label: "US", scope: "us", tip: "US rank this season, at the age of the swim. Click to open the list." },
 ];
 
 export const DEFAULT_COLS = Object.fromEntries(TABLE_COLUMNS.map((c) => [c.key, c.defaultOn]));
@@ -128,6 +140,7 @@ export function groupBestTimes(records, allRecords = []) {
         raw: r.swimTime,
         id: r.swimTimeId ?? null,
         meetId: r.meetId ?? null,
+        distance: dist,
         swimDate: r.swimDate ?? null,
         age: r.swimmerAge ?? null,
         meetName: r.meetName ?? null,
@@ -156,29 +169,73 @@ export function groupBestTimes(records, allRecords = []) {
         String(b.swimDate ?? "").localeCompare(String(a.swimDate ?? "")),
     );
     const bestHist = hist[0] ?? null;
-    const pbDate = r.swimDate ?? bestHist?.swimDate ?? null;
+    // GetBestTimes can lag a swim that the full history already has. The faster
+    // recorded swim is the personal best, and its age, meet, and date stay with it.
+    const ahead =
+      bestHist && parsed.hundredths != null && bestHist.hundredths < parsed.hundredths ? bestHist : null;
+    const timeH = ahead ? ahead.hundredths : parsed.hundredths;
+    const pbDate = ahead ? ahead.swimDate : (r.swimDate ?? bestHist?.swimDate ?? null);
+    const meta = ahead ?? bestHist;
     const prevSwim =
       hist.slice(1).find((s) => !pbDate || !s.swimDate || s.swimDate < pbDate) ?? hist[1] ?? null;
-    const drop =
-      parsed.hundredths != null && prevSwim?.hundredths != null
-        ? parsed.hundredths - prevSwim.hundredths
-        : null;
+    const drop = timeH != null && prevSwim?.hundredths != null ? timeH - prevSwim.hundredths : null;
 
     // Every recorded swim in this event and course, for the progress report.
     rows.get(key).history[r.courseCode] = hist;
     rows.get(key).actual[r.courseCode] = {
-      hundredths: parsed.hundredths,
-      flag: parsed.flag,
-      raw: r.swimTime,
+      hundredths: timeH,
+      flag: ahead ? ahead.flag : parsed.flag,
+      raw: ahead ? ahead.raw : r.swimTime,
       distance: r.distance, // as actually raced, needed when converting from it
       swimDate: pbDate,
-      age: bestHist?.age ?? null,
-      meetName: bestHist?.meetName ?? null,
-      powerPoints: bestHist?.powerPoints ?? null,
+      age: meta?.age ?? null,
+      meetName: meta?.meetName ?? null,
+      powerPoints: meta?.powerPoints ?? null,
       swims: hist.length || null,
       drop,
       prevTime: prevSwim?.hundredths ?? null,
       prevDate: prevSwim?.swimDate ?? null,
+    };
+  }
+
+  // A course the best-times feed has not listed yet still counts. The full
+  // history already has it. The yards 200 IM is that case: the feed only has
+  // the long-course best, so the yards cell was a conversion of that.
+  for (const [hKey, hist] of historyMap) {
+    const [stroke, canonStr, course] = hKey.split("|");
+    const canon = Number(canonStr);
+    if (!stroke || !canon || !course || !hist.length) continue;
+    if (!byStroke.has(stroke)) byStroke.set(stroke, new Map());
+    const rows = byStroke.get(stroke);
+    if (!rows.has(canon)) {
+      rows.set(canon, { distance: canon, stroke, actual: {}, history: {} });
+    }
+    const row = rows.get(canon);
+    if (row.actual[course]?.hundredths != null) continue;
+    hist.sort(
+      (a, b) =>
+        a.hundredths - b.hundredths ||
+        String(b.swimDate ?? "").localeCompare(String(a.swimDate ?? "")),
+    );
+    const best = hist[0];
+    const prev =
+      hist.slice(1).find((s) => !best.swimDate || !s.swimDate || s.swimDate < best.swimDate) ??
+      hist[1] ??
+      null;
+    row.history[course] = hist;
+    row.actual[course] = {
+      hundredths: best.hundredths,
+      flag: best.flag,
+      raw: best.raw,
+      distance: best.distance ?? canon,
+      swimDate: best.swimDate ?? null,
+      age: best.age ?? null,
+      meetName: best.meetName ?? null,
+      powerPoints: best.powerPoints ?? null,
+      swims: hist.length,
+      drop: prev?.hundredths != null ? best.hundredths - prev.hundredths : null,
+      prevTime: prev?.hundredths ?? null,
+      prevDate: prev?.swimDate ?? null,
     };
   }
 
@@ -317,6 +374,18 @@ function cellHtml(row, course, primary, std) {
   </td>`;
 }
 
+function rankCellHtml(row, course, ranks, col) {
+  const actual = row.actual[course];
+  if (actual?.hundredths == null) return `<td class="m-td rk-td empty">·</td>`;
+  const key = `${row.stroke}|${row.distance}`;
+  const cell = ranks?.[key]?.[col.key];
+  const text = cell?.text ?? "…";
+  const kind = cell?.kind ?? "wait";
+  const title = cell?.title ?? col.tip;
+  const scope = cell?.scope ?? col.scope;
+  return `<td class="m-td rk-td"><button type="button" class="rk-link ${esc(kind)}" data-rank-open data-rank-cell="${esc(key)}" data-rank-col="${esc(col.key)}" data-stroke="${esc(row.stroke)}" data-distance="${row.distance}" data-rank-scope="${esc(scope)}" title="${esc(title)}">${esc(text)}</button></td>`;
+}
+
 function metaCellHtml(row, primaryCourse, key) {
   const actual = row.actual[primaryCourse];
   switch (key) {
@@ -431,7 +500,7 @@ const COURSE_LEN = { SCY: "25 yd", SCM: "25 m", LCM: "50 m" };
  * The board: ONE consolidated table, with stroke groups as full-width rows
  * inside it, plus toggleable metadata, motivational cuts, and meet cuts.
  */
-export function bestTimesTable(groups, primaryCourse, std = null, cols = null, open = null) {
+export function bestTimesTable(groups, primaryCourse, std = null, cols = null, open = null, ranks = null) {
   if (!groups.length) {
     return `<p class="empty-state">No times on record for this swimmer.</p>`;
   }
@@ -440,14 +509,10 @@ export function bestTimesTable(groups, primaryCourse, std = null, cols = null, o
   // render the core 3-course layout; when `cols` is supplied by the app, render the
   // active course followed by Age, Pts, B–AAAA Cuts, Meet Cuts, Date, and Meet.
   const hasColsArg = cols !== null && typeof cols === "object";
-  const vis = {
-    age: hasColsArg ? Boolean(cols.age ?? DEFAULT_COLS.age) : false,
-    pts: hasColsArg ? Boolean(cols.pts ?? DEFAULT_COLS.pts) : false,
-    mot: hasColsArg ? Boolean(cols.mot ?? DEFAULT_COLS.mot) : false,
-    meets: hasColsArg ? Boolean(cols.meets ?? DEFAULT_COLS.meets) : false,
-    date: hasColsArg ? Boolean(cols.date ?? DEFAULT_COLS.date) : false,
-    meet: hasColsArg ? Boolean(cols.meet ?? DEFAULT_COLS.meet) : false,
-  };
+  const vis = Object.fromEntries(
+    TABLE_COLUMNS.map((c) => [c.key, hasColsArg ? Boolean(cols[c.key] ?? DEFAULT_COLS[c.key]) : false]),
+  );
+  const rankDefs = RANK_COLS.filter((c) => vis[c.key]);
 
   const visibleCourses = hasColsArg ? [primaryCourse] : COURSES;
   const activeStd = Boolean(std?.data && std.gender && std.ageGroup);
@@ -468,6 +533,7 @@ export function bestTimesTable(groups, primaryCourse, std = null, cols = null, o
   const totalCols =
     1 +
     visibleCourses.length +
+    rankDefs.length +
     leftMetaDefs.length +
     motLevels.length +
     regionalMeets.length +
@@ -482,6 +548,12 @@ export function bestTimesTable(groups, primaryCourse, std = null, cols = null, o
     `<th class="m-th m-${m.key}" data-toggle-col="${m.key}" title="${esc(m.tip)}">${esc(m.label)}</th>`;
 
   const headCourses = visibleCourses.map(courseTh).join("");
+  const headRank = rankDefs
+    .map(
+      (c) =>
+        `<th class="m-th m-rank" data-toggle-col="${c.key}" title="${esc(c.tip)}">${esc(c.label)}</th>`,
+    )
+    .join("");
   const headLeftMeta = leftMetaDefs.map(metaTh).join("");
   const headMot = motLevels
     .map(
@@ -513,6 +585,7 @@ export function bestTimesTable(groups, primaryCourse, std = null, cols = null, o
           const courseCells = visibleCourses
             .map((c) => cellHtml(row, c, c === primaryCourse, std))
             .join("");
+          const rankCell = rankDefs.map((c) => rankCellHtml(row, primaryCourse, ranks, c)).join("");
           const leftMetaCells = leftMetaDefs
             .map((m) => metaCellHtml(row, primaryCourse, m.key))
             .join("");
@@ -530,7 +603,7 @@ export function bestTimesTable(groups, primaryCourse, std = null, cols = null, o
           const isOpen = open?.stroke === row.stroke && open?.distance === row.distance;
           return `<tr class="ev-row" data-stroke="${esc(row.stroke)}" data-distance="${row.distance}" tabindex="0" aria-expanded="${isOpen}" title="Progress report" style="--i:${i++}">
             <th scope="row" class="ev">${row.distance}${alt}</th>
-            ${courseCells}${leftMetaCells}${motCells}${meetCells}${rightMetaCells}
+            ${courseCells}${rankCell}${leftMetaCells}${motCells}${meetCells}${rightMetaCells}
           </tr>`;
         })
         .join("");
@@ -544,12 +617,13 @@ export function bestTimesTable(groups, primaryCourse, std = null, cols = null, o
       <colgroup>
         <col class="ev-col" />
         ${visibleCourses.map(() => '<col class="c-col" />').join("")}
+        ${rankDefs.map(() => '<col class="m-col m-col-rank" />').join("")}
         ${leftMetaDefs.map((m) => `<col class="m-col m-col-${m.key}" />`).join("")}
         ${motLevels.map(() => '<col class="cut-col" />').join("")}
         ${regionalMeets.map(() => '<col class="cut-col mc-col" />').join("")}
         ${rightMetaDefs.map((m) => `<col class="m-col m-col-${m.key}" />`).join("")}
       </colgroup>
-      <thead><tr><th class="ev">Event</th>${headCourses}${headLeftMeta}${headMot}${headMeets}${headRightMeta}</tr></thead>
+      <thead><tr><th class="ev">Event</th>${headCourses}${headRank}${headLeftMeta}${headMot}${headMeets}${headRightMeta}</tr></thead>
       <tbody>${body}</tbody>
     </table>
   </div>`;

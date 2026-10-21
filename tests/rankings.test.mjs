@@ -65,11 +65,17 @@ function setup({ ctx = {}, topTimes, events = EVENTS, store = new Map() } = {}) 
   const errors = [];
   const prefs = new Map();
   const context = {
-    swimmer: { memberId: "ME", lscCode: "PN", swimmerAge: 10 },
+    swimmer: { memberId: "ME", lscCode: "PN", swimmerAge: 10, clubName: "BC Swim Club" },
     gender: "boys",
     ageGroup: "10U",
     course: "SCY",
-    groups: [{ stroke: "Freestyle", rows: [{ distance: 100, actual: { SCY: {}, LCM: {} } }] }],
+    ranks: { team: true, lsc: true, zone: false, us: false },
+    groups: [
+      {
+        stroke: "Freestyle",
+        rows: [{ distance: 100, stroke: "Freestyle", actual: { SCY: { hundredths: 5200 }, LCM: { hundredths: 5800 } } }],
+      },
+    ],
     ...ctx,
   };
   const host = { innerHTML: "", addEventListener() {} };
@@ -97,8 +103,12 @@ function setup({ ctx = {}, topTimes, events = EVENTS, store = new Map() } = {}) 
       store.set(`swr:${key}`, data);
       return { data };
     },
-    getSession: (k) => store.get(`s:${k}`) ?? null,
-    setSession: (k, v) => store.set(`s:${k}`, v),
+    getEntry: (k) => {
+      const v = store.get(`e:${k}`);
+      if (!v) return null;
+      return { data: v.data, fetchedAt: v.at, stale: Date.now() - v.at > 12 * 60 * 60 * 1000 };
+    },
+    setEntry: (k, data) => store.set(`e:${k}`, { data, at: Date.now() }),
     pref: (k, d) => (prefs.has(k) ? prefs.get(k) : d),
     setPref: (k, v) => prefs.set(k, v),
   };
@@ -106,183 +116,238 @@ function setup({ ctx = {}, topTimes, events = EVENTS, store = new Map() } = {}) 
   return { ctl, calls, errors, host, context, store, prefs };
 }
 
-await checkAsync("a closed panel makes no request and shows only its header", async () => {
-  const { ctl, calls, host } = setup();
+await checkAsync("a hidden column and a closed page make no request", async () => {
+  const { ctl, calls, host } = setup({
+    ctx: { ranks: { team: false, lsc: false, zone: false, us: false } },
+  });
   ctl.refresh();
   await flush();
   assert.equal(calls.allEvents + calls.seasons + calls.topTimes.length, 0);
-  assert.match(host.innerHTML, /data-rank-toggle/);
-  assert.doesNotMatch(host.innerHTML, /data-rank-event/);
+  assert.equal(host.innerHTML, "");
 });
 
-await checkAsync("opening asks for the event and season lists once, then one list per scope", async () => {
+await checkAsync("the board asks for each event's LSC list only", async () => {
   const { ctl, calls } = setup();
-  ctl.act({ type: "toggle" });
+  ctl.refresh();
   await flush();
   assert.equal(calls.allEvents, 1);
   assert.equal(calls.seasons, 1);
-  assert.equal(calls.topTimes.length, 3);
-  const [lsc, zone, nation] = calls.topTimes;
-  for (const b of calls.topTimes) {
-    assert.equal(b.eventId, 2);
-    assert.equal(b.competitionGenderTypeId, 1);
-    assert.equal(b.minAge, 10);
-    assert.equal(b.maxAge, 10);
-    assert.equal(b.seasonKey, 1156, "October 2026 is the 2027 season");
-    assert.equal(b.bestTimesOnly, 1);
-  }
-  assert.deepEqual([lsc.lscCode, lsc.zoneCode], ["PN", null]);
-  assert.deepEqual([zone.lscCode, zone.zoneCode], [null, "Western"]);
-  assert.deepEqual([nation.lscCode, nation.zoneCode], [null, null]);
+  assert.equal(calls.topTimes.length, 1);
+  const body = calls.topTimes[0];
+  assert.equal(body.eventId, 2);
+  assert.equal(body.competitionGenderTypeId, 1);
+  assert.equal(body.minAge, 10);
+  assert.equal(body.maxAge, 10);
+  assert.equal(body.seasonKey, 1156, "October 2026 is the 2027 season");
+  assert.equal(body.bestTimesOnly, 1);
+  assert.deepEqual([body.lscCode, body.zoneCode], ["PN", null]);
+  assert.ok(calls.topTimes.every((b) => b.zoneCode == null && b.lscCode));
+  const cell = ctl.boardCells()["Freestyle|100"];
+  assert.equal(cell.team.text, "2", "team rank, counted from clubmates");
+  assert.equal(cell.team.scope, "club");
+  assert.equal(cell.team.kind, "rank");
+  assert.equal(cell.lsc.text, "4", "LSC place is the list's eventRank");
+  assert.equal(cell.lsc.scope, "lsc");
+  assert.equal(cell.zone, undefined, "zone stays off until its column is on");
+  assert.equal(cell.us, undefined);
 });
 
-await checkAsync("the open state is remembered", async () => {
-  const { ctl, prefs } = setup();
-  ctl.act({ type: "toggle" });
-  assert.equal(prefs.get("rankOpen"), true);
-  ctl.act({ type: "toggle" });
-  assert.equal(prefs.get("rankOpen"), false);
-});
-
-await checkAsync("cards: LSC rank, zone and nation outside the top 100, club derived", async () => {
-  const { ctl, host } = setup();
-  ctl.act({ type: "toggle" });
-  await flush();
-  const m = ctl.model();
-  const by = Object.fromEntries(m.cards.map((c) => [c.label, c]));
-  assert.equal(by.PN.kind, "ranked");
-  assert.equal(by.PN.rank, 4, "the server's eventRank, not the array position");
-  assert.equal(by.PN.of, "of 5", "a short list is complete");
-  assert.equal(by.Western.kind, "outside");
-  assert.equal(by.US.kind, "outside");
-  assert.equal(by.BC.kind, "ranked");
-  assert.equal(by.BC.rank, 2);
-  assert.match(by.BC.of, /of 3/);
-  assert.match(host.innerHTML, /#4/);
-  assert.match(host.innerHTML, /Not in the top 100/);
-});
-
-await checkAsync("a repeated refresh and a repeated selection reuse the lists", async () => {
-  const { ctl, calls } = setup();
-  ctl.act({ type: "toggle" });
-  await flush();
-  ctl.refresh();
+await checkAsync("a second event is one more LSC list, and a repeat is free", async () => {
+  const { ctl, calls, context } = setup();
   ctl.refresh();
   await flush();
-  assert.equal(calls.topTimes.length, 3);
-
-  ctl.act({ type: "event", value: "3" });
+  context.groups = [
+    {
+      stroke: "Freestyle",
+      rows: [
+        { distance: 100, stroke: "Freestyle", actual: { SCY: { hundredths: 1 } } },
+        { distance: 200, stroke: "Freestyle", actual: { SCY: { hundredths: 1 } } },
+      ],
+    },
+  ];
+  ctl.refresh();
   await flush();
-  assert.equal(calls.topTimes.length, 6, "a new event is three new lists");
-  ctl.act({ type: "event", value: "2" });
+  assert.equal(calls.topTimes.length, 2);
+  assert.deepEqual(
+    calls.topTimes.map((b) => b.eventId).sort(),
+    [2, 3],
+  );
+  ctl.refresh();
   await flush();
-  assert.equal(calls.topTimes.length, 6, "going back costs nothing");
+  assert.equal(calls.topTimes.length, 2);
 });
 
-await checkAsync("lists already cached for the tab are shown without a request", async () => {
-  // A reload keeps sessionStorage but loses the controller's memory.
+await checkAsync("lists already in browser storage are shown without a request", async () => {
   const first = setup();
-  first.ctl.act({ type: "toggle" });
+  first.ctl.refresh();
   await flush();
-  assert.equal(first.calls.topTimes.length, 3);
+  assert.equal(first.calls.topTimes.length, 1);
 
   const second = setup({ store: first.store });
-  second.ctl.act({ type: "toggle" });
+  second.ctl.refresh();
   await flush();
   assert.equal(second.calls.topTimes.length, 0, "the cached lists are reused");
-  assert.match(second.host.innerHTML, /#4/, "and the panel redraws from them");
-  assert.doesNotMatch(second.host.innerHTML, /Loading/);
+  assert.equal(second.ctl.boardCells()["Freestyle|100"].team.text, "2");
 });
 
-await checkAsync("age and season choices change the request", async () => {
-  const { ctl, calls } = setup();
-  ctl.act({ type: "toggle" });
+await checkAsync("a list older than a day and a half is shown, then fetched again", async () => {
+  const first = setup();
+  first.ctl.refresh();
   await flush();
-  calls.topTimes.length = 0;
+  const key = [...first.store.keys()].find((k) => String(k).startsWith("e:rank:"));
+  first.store.get(key).at = Date.now() - 40 * 60 * 60 * 1000;
 
-  ctl.act({ type: "season", value: "all" });
+  const second = setup({
+    store: first.store,
+    topTimes: () => [row(1, "ME", "49.00", "BC")],
+  });
+  second.ctl.refresh();
   await flush();
-  assert.equal(calls.topTimes.length, 3);
-  assert.equal(calls.topTimes[0].seasonKey, null);
+  assert.equal(second.calls.topTimes.length, 1, "the old copy is checked again");
+  assert.equal(second.ctl.boardCells()["Freestyle|100"].team.text, "1");
+  assert.equal(second.ctl.boardCells()["Freestyle|100"].lsc.text, "1");
+});
+
+await checkAsync("the page is the team list, and age on the page does not move the board rank", async () => {
+  const { ctl, calls, host } = setup();
+  ctl.refresh();
+  await flush();
+  ctl.act({ type: "open", stroke: "Freestyle", distance: 100, scope: "club" });
+  await flush();
+  assert.equal(calls.topTimes.length, 1, "the page reuses the board's LSC list");
+  const m = ctl.model();
+  assert.equal(m.open, true);
+  assert.equal(m.scope, "club");
+  assert.equal(m.eventLabel, "100 Freestyle");
+  assert.deepEqual(
+    m.tabs.map((t) => t.key),
+    ["club", "lsc", "zone", "us"],
+  );
+  assert.equal(m.tabs[0].label, "BC");
+  assert.deepEqual(
+    m.table.rows.map((r) => [r.memberId, r.eventRank]),
+    [
+      ["C1", 1],
+      ["ME", 2],
+      ["C2", 3],
+    ],
+  );
+  assert.match(host.innerHTML, /data-rank-back/);
+  assert.match(host.innerHTML, /class="me"/);
+  assert.doesNotMatch(host.innerHTML, /data-rank-event/);
+  assert.doesNotMatch(host.innerHTML, /USA Swimming returns only/);
 
   calls.topTimes.length = 0;
   ctl.act({ type: "age", value: "all" });
   await flush();
+  assert.equal(calls.topTimes.length, 1);
   assert.equal(calls.topTimes[0].minAge, null);
-  assert.equal(calls.topTimes[0].maxAge, null);
+  assert.equal(ctl.boardCells()["Freestyle|100"].team.text, "2", "the column stays on the swimmer's age");
 
   calls.topTimes.length = 0;
-  ctl.act({ type: "age", value: "group" });
+  ctl.act({ type: "season", value: "all" });
   await flush();
-  assert.equal(calls.topTimes[0].minAge, 1);
-  assert.equal(calls.topTimes[0].maxAge, 10);
+  assert.equal(calls.topTimes[0].seasonKey, null);
 });
 
-await checkAsync("switching course keeps the event, mapped to the course raced", async () => {
+await checkAsync("LSC and zone are the other groups, and zone is its own list", async () => {
+  const { ctl, calls } = setup();
+  ctl.act({ type: "open", stroke: "Freestyle", distance: 100, scope: "lsc" });
+  await flush();
+  const lsc = ctl.model();
+  assert.equal(lsc.scope, "lsc");
+  assert.equal(lsc.table.rows.length, 5, "the LSC page is the whole list, not clubmates only");
+  assert.equal(calls.topTimes.filter((b) => b.zoneCode).length, 0);
+
+  ctl.act({ type: "scope", value: "zone" });
+  await flush();
+  assert.equal(calls.topTimes.filter((b) => b.zoneCode === "Western").length, 1);
+  assert.equal(ctl.model().scope, "zone");
+  assert.match(ctl.model().scopeNote, /top 100/);
+
+  ctl.act({ type: "scope", value: "us" });
+  await flush();
+  const national = calls.topTimes.filter((b) => b.lscCode == null && b.zoneCode == null);
+  assert.equal(national.length, 1);
+  assert.equal(ctl.model().scope, "us");
+  assert.match(ctl.model().scopeNote, /top 100/);
+});
+
+await checkAsync("turning on Zone and US fetches those lists and fills the cells", async () => {
   const { ctl, calls, context } = setup({
-    ctx: { groups: [{ stroke: "Freestyle", rows: [{ distance: 500, actual: { SCY: {}, LCM: {} } }] }] },
+    topTimes: (b) => {
+      if (b.lscCode) return LSC_LIST;
+      if (b.zoneCode) return [row(9, "ME", "52.00", "BC"), ...fullList().slice(0, 99)];
+      return [row(40, "ME", "52.00", "BC"), ...fullList().slice(0, 99)];
+    },
   });
-  ctl.act({ type: "toggle" });
+  ctl.refresh();
+  await flush();
+  assert.equal(calls.topTimes.length, 1);
+
+  context.ranks = { team: true, lsc: true, zone: true, us: true };
+  ctl.refresh();
+  await flush();
+  assert.equal(calls.topTimes.filter((b) => b.zoneCode === "Western").length, 1);
+  assert.equal(calls.topTimes.filter((b) => b.lscCode == null && b.zoneCode == null).length, 1);
+  const cell = ctl.boardCells()["Freestyle|100"];
+  assert.equal(cell.team.text, "2");
+  assert.equal(cell.lsc.text, "4");
+  assert.equal(cell.zone.text, "9");
+  assert.equal(cell.us.text, "40");
+});
+
+await checkAsync("switching course asks for the same event in that course", async () => {
+  const { ctl, calls, context } = setup({
+    ctx: {
+      groups: [
+        {
+          stroke: "Freestyle",
+          rows: [{ distance: 500, stroke: "Freestyle", actual: { SCY: { hundredths: 1 }, LCM: { hundredths: 1 } } }],
+        },
+      ],
+    },
+  });
+  ctl.refresh();
   await flush();
   assert.equal(calls.topTimes[0].eventId, 4, "500 free in yards");
-  calls.topTimes.length = 0;
   context.course = "LCM";
   ctl.refresh();
   await flush();
-  assert.equal(calls.topTimes[0].eventId, 58, "the same event is 400 free in long meters");
+  assert.equal(calls.topTimes.at(-1).eventId, 58, "the same event is 400 free in long meters");
 });
 
 await checkAsync("no gender means a note and no leaderboard request", async () => {
   const { ctl, calls, host } = setup({ ctx: { gender: null } });
-  ctl.act({ type: "toggle" });
+  ctl.act({ type: "open", stroke: "Freestyle", distance: 100, scope: "club" });
   await flush();
   assert.equal(calls.topTimes.length, 0);
   assert.match(host.innerHTML, /Pick Boys or Girls/);
+  assert.equal(ctl.boardCells()["Freestyle|100"].team.text, "…");
 });
 
-await checkAsync("browsing the other gender shows the leaderboard but no standings", async () => {
-  const { ctl, calls } = setup();
-  ctl.act({ type: "toggle" });
-  await flush();
-  calls.topTimes.length = 0;
-  ctl.act({ type: "gender", value: "girls" });
-  await flush();
-  assert.equal(calls.topTimes[0].competitionGenderTypeId, 2);
-  const m = ctl.model();
-  assert.equal(m.cards, null, "a boy's standing in the girls' list would be a false 'not in the top 100'");
-  assert.ok(m.table.rows.length > 0);
-});
-
-await checkAsync("the club tab holds clubmates only, ranked among themselves", async () => {
-  const { ctl, host } = setup();
-  ctl.act({ type: "toggle" });
-  await flush();
-  assert.deepEqual(ctl.model().tabs.map((t) => t.key), ["club", "lsc", "zone", "national"]);
-  ctl.act({ type: "tab", value: "club" });
-  const m = ctl.model();
-  assert.equal(m.tab, "club");
-  assert.deepEqual(
-    m.table.rows.map((r) => [r.memberId, r.eventRank]),
-    [["C1", 1], ["ME", 2], ["C2", 3]],
-  );
-  assert.match(m.tabNote, /BC Swim Club/);
-  assert.match(host.innerHTML, /class="me"/);
-});
-
-await checkAsync("an unattached swimmer gets no club card standing", async () => {
+await checkAsync("an unattached swimmer has no team tab and the cell shows the LSC rank", async () => {
   const { ctl } = setup({
-    topTimes: (b) => (b.lscCode ? [row(1, "ME", "50.00", "UN")] : fullList()),
+    ctx: { swimmer: { memberId: "ME", lscCode: "PN", swimmerAge: 10, clubName: "Unattached" } },
+    topTimes: () => [row(1, "ME", "50.00", "UN")],
   });
-  ctl.act({ type: "toggle" });
+  ctl.refresh();
   await flush();
-  const club = ctl.model().cards[0];
-  assert.equal(club.label, "Club");
-  assert.equal(club.kind, "unknown");
-  assert.match(club.message, /unattached/i, "the swimmer is listed, so do not ask for another time");
-  assert.deepEqual(ctl.model().tabs.map((t) => t.key), ["lsc", "zone", "national"]);
+  const cell = ctl.boardCells()["Freestyle|100"];
+  assert.equal(cell.team.text, "—");
+  assert.equal(cell.team.kind, "miss");
+  assert.equal(cell.lsc.text, "1");
+  assert.equal(cell.lsc.scope, "lsc");
+  ctl.act({ type: "open", stroke: "Freestyle", distance: 100, scope: "club" });
+  await flush();
+  assert.deepEqual(
+    ctl.model().tabs.map((t) => t.key),
+    ["lsc", "zone", "us"],
+  );
+  assert.equal(ctl.model().scope, "lsc");
 });
 
-await checkAsync("a failed list shows its error, reports it, and a retry fetches again", async () => {
+await checkAsync("a failed list shows on the cell, and a retry fetches again", async () => {
   let fail = true;
   const { ctl, calls, errors } = setup({
     topTimes: (b) => {
@@ -290,13 +355,10 @@ await checkAsync("a failed list shows its error, reports it, and a retry fetches
       return b.lscCode ? LSC_LIST : fullList();
     },
   });
-  ctl.act({ type: "toggle" });
+  ctl.refresh();
   await flush();
   assert.equal(errors.length, 1);
-  assert.equal(ctl.model().cards.find((c) => c.label === "PN").kind, "error");
-  const club = ctl.model().cards.find((c) => c.label === "Club");
-  assert.doesNotMatch(club.message, /Needs a time/, "an outage is not the swimmer's missing time");
-  assert.match(club.message, /list/i);
+  assert.equal(ctl.boardCells()["Freestyle|100"].team.kind, "error");
   const before = calls.topTimes.length;
 
   ctl.refresh();
@@ -306,7 +368,7 @@ await checkAsync("a failed list shows its error, reports it, and a retry fetches
   fail = false;
   ctl.act({ type: "retry" });
   await flush();
-  assert.equal(ctl.model().cards.find((c) => c.label === "PN").kind, "ranked");
+  assert.equal(ctl.boardCells()["Freestyle|100"].team.text, "2");
 });
 
 await checkAsync("a sign-in error is passed to the page so it can open the sign-in row", async () => {
@@ -315,42 +377,58 @@ await checkAsync("a sign-in error is passed to the page so it can open the sign-
       throw new ApiError("sign in", 401, { needsSession: true });
     },
   });
-  ctl.act({ type: "toggle" });
+  ctl.refresh();
   await flush();
   assert.ok(errors.every((e) => e.needsSession));
   assert.ok(errors.length > 0);
 });
 
-await checkAsync("another swimmer starts from the board's defaults", async () => {
+await checkAsync("outside the top 100 the cell is a dash and the page says so", async () => {
+  const { ctl, host } = setup({ topTimes: () => fullList() });
+  ctl.act({ type: "open", stroke: "Freestyle", distance: 100, scope: "club" });
+  await flush();
+  assert.equal(ctl.boardCells()["Freestyle|100"].team.text, "—");
+  assert.equal(ctl.boardCells()["Freestyle|100"].lsc.text, "—");
+  assert.match(host.innerHTML, /Not in the PN top 100/);
+  assert.match(host.innerHTML, /100th time/);
+});
+
+await checkAsync("another swimmer uses that swimmer's age and LSC", async () => {
   const { ctl, calls, context } = setup();
-  ctl.act({ type: "toggle" });
+  ctl.act({ type: "open", stroke: "Freestyle", distance: 100, scope: "club" });
   await flush();
   ctl.act({ type: "age", value: "all" });
   ctl.act({ type: "season", value: "all" });
   await flush();
 
-  context.swimmer = { memberId: "OTHER", lscCode: "FL", swimmerAge: 13 };
+  context.swimmer = { memberId: "OTHER", lscCode: "FL", swimmerAge: 13, clubName: "FL Swim Club" };
   calls.topTimes.length = 0;
   ctl.refresh();
   await flush();
-  assert.equal(calls.topTimes[0].minAge, 13);
+  assert.equal(calls.topTimes[0].minAge, 13, "the board goes back to the new swimmer's age");
+  assert.equal(calls.topTimes[0].lscCode, "FL");
   assert.equal(calls.topTimes[0].seasonKey, 1156);
-  assert.equal(calls.topTimes[1].zoneCode, "Southern");
+  assert.equal(ctl.model().ageValue, "age");
 });
 
-await checkAsync("no swimmer renders an empty panel without a request", async () => {
-  const { ctl, calls } = setup({ ctx: { swimmer: null } });
-  ctl.act({ type: "toggle" });
+await checkAsync("no swimmer renders nothing and makes no request", async () => {
+  const { ctl, calls, host } = setup({ ctx: { swimmer: null } });
+  ctl.act({ type: "open", stroke: "Freestyle", distance: 100, scope: "club" });
   await flush();
   assert.equal(calls.topTimes.length, 0);
+  assert.equal(host.innerHTML, "");
 });
 
-await checkAsync("a deep link with no LSC yet ranks nationally only", async () => {
-  const { ctl, calls } = setup({ ctx: { swimmer: { memberId: "ME", swimmerAge: 10 } } });
-  ctl.act({ type: "toggle" });
+await checkAsync("a swimmer with no LSC yet makes no list request", async () => {
+  const { ctl, calls, host } = setup({
+    ctx: { swimmer: { memberId: "ME", swimmerAge: 10, clubName: "BC Swim Club" } },
+  });
+  ctl.act({ type: "open", stroke: "Freestyle", distance: 100, scope: "club" });
   await flush();
-  assert.equal(calls.topTimes.length, 1);
-  assert.deepEqual([calls.topTimes[0].lscCode, calls.topTimes[0].zoneCode], [null, null]);
+  assert.equal(calls.topTimes.length, 0);
+  assert.match(host.innerHTML, /No LSC/);
+  assert.equal(ctl.boardCells()["Freestyle|100"].team.text, "—");
+  assert.equal(ctl.boardCells()["Freestyle|100"].lsc.text, "—");
 });
 
 console.log(`\n${pass} passed, ${fails.length} failed`);

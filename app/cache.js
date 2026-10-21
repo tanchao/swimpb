@@ -46,12 +46,16 @@ export function setEntry(key, data) {
  * @param {string} key
  * @param {() => Promise<any>} fetcher
  * @param {(data:any) => void} onFresh
+ * @param {{revalidate?:boolean, onUnchanged?:() => void}} [opts] `revalidate`
+ *   still returns a fresh cache immediately, then checks the server. Personal
+ *   bests use it so a new swim shows up on the next visit instead of waiting
+ *   out the 12-hour window. `onUnchanged` runs when that check matches the cache.
  * @returns {Promise<{data:any, fromCache:boolean, fetchedAt:number}>}
  */
-export async function swr(key, fetcher, onFresh) {
+export async function swr(key, fetcher, onFresh, opts = {}) {
   const cached = getEntry(key);
 
-  if (cached && !cached.stale) {
+  if (cached && !cached.stale && !opts.revalidate) {
     return { data: cached.data, fromCache: true, fetchedAt: cached.fetchedAt };
   }
 
@@ -61,7 +65,9 @@ export async function swr(key, fetcher, onFresh) {
       try {
         const fresh = await fetcher();
         setEntry(key, fresh);
-        if (JSON.stringify(fresh) !== JSON.stringify(cached.data)) onFresh?.(fresh);
+        const changed = JSON.stringify(fresh) !== JSON.stringify(cached.data);
+        if (changed) onFresh?.(fresh);
+        else opts.onUnchanged?.();
       } catch {
         // Offline or API hiccup: the stale copy on screen is still useful.
       }

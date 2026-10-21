@@ -3,7 +3,7 @@
 // Covers session parsing and ApiError semantics.
 //
 // The storage accessors (session/setSession/clearSession) are not covered —
-// they touch sessionStorage, which node has no equivalent of, and they are thin
+// they touch localStorage, which node has no equivalent of, and they are thin
 // wrappers over a JSON round-trip.
 //
 // Every value below is synthetic. Do not paste a live session in here to debug:

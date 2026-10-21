@@ -1822,27 +1822,58 @@ tr.sp-row > td {
 
 .rp-table tr.sp-row td {
   padding: 0.3rem 0.4rem;
-
-/* Rankings --------------------------------------------------------------- */
-
-/* A panel like the focus list: prose-sized labels, mono only for the numbers. */
-.rank {
-  margin-top: 1.8rem;
-  padding: 1.1rem 1.2rem 0.9rem;
-  border: 1px solid var(--rule);
-  border-radius: var(--r);
-  background: var(--panel);
 }
 
-.rank-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.8rem;
+/* Rank column on the board ---------------------------------------------- */
+
+.m-th.m-rank,
+.rk-td {
+  text-align: center;
+  width: 3.1rem;
+}
+
+button.rk-link {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-feature-settings: "tnum" 1;
+  font-size: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0.12rem 0.4rem;
+  border-radius: 3px;
+}
+
+button.rk-link:hover,
+button.rk-link:focus-visible {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  outline: none;
+}
+
+button.rk-link.miss,
+button.rk-link.wait {
+  color: var(--ink-3);
+  font-weight: 400;
+}
+
+button.rk-link.error {
+  color: var(--fl);
+}
+
+/* Ranking page: one event, one group ------------------------------------ */
+
+.rank-page {
+  margin-top: 0.2rem;
+}
+
+.rank-back {
+  margin-bottom: 0.85rem;
 }
 
 .rank-title {
-  margin: 0;
+  margin: 0 0 0.75rem;
   font-family: var(--display);
   font-size: 0.95rem;
   font-weight: 600;
@@ -1860,15 +1891,15 @@ tr.sp-row > td {
   color: var(--accent);
 }
 
-.rank-controls {
+.rank-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
-  margin: 0.9rem 0 0.8rem;
+  margin: 0 0 0.75rem;
 }
 
-.rank-controls select {
+.rank-bar select {
   appearance: none;
   background: var(--panel-2);
   border: 1px solid var(--rule);
@@ -1879,63 +1910,6 @@ tr.sp-row > td {
   letter-spacing: 0.06em;
   padding: 0.3rem 0.6rem;
   cursor: pointer;
-}
-
-.rank-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
-  gap: 0.6rem;
-  margin: 0.4rem 0 1rem;
-}
-
-.rank-card {
-  display: grid;
-  gap: 0.15rem;
-  padding: 0.65rem 0.8rem;
-  border: 1px solid var(--rule);
-  border-radius: var(--r);
-  background: var(--panel-2);
-}
-
-.rank-card.ranked {
-  border-color: var(--rule-hi);
-}
-
-.rank-scope {
-  font-family: var(--display);
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
-  color: var(--ink-2);
-}
-
-.rank-num {
-  font-family: var(--mono);
-  font-feature-settings: "tnum" 1;
-  font-size: 1.5rem;
-  font-weight: 500;
-  color: var(--ink-3);
-}
-
-.rank-card.ranked .rank-num {
-  color: var(--accent);
-}
-
-.rank-sub {
-  font-family: var(--mono);
-  font-feature-settings: "tnum" 1;
-  font-size: 0.72rem;
-  line-height: 1.4;
-  color: var(--ink-3);
-}
-
-.rank-card.error .rank-sub {
-  color: var(--fl);
-}
-
-.rank-tabs {
-  margin: 0 0 0.6rem;
 }
 
 .rank-note {
@@ -1949,18 +1923,7 @@ tr.sp-row > td {
   color: var(--fl);
 }
 
-.rank-foot {
-  margin: 0.9rem 0 0;
-  padding-top: 0.8rem;
-  border-top: 1px solid var(--rule);
-  font-size: 0.76rem;
-  line-height: 1.5;
-  color: var(--ink-3);
-}
-
 .rank-wrap {
-  max-height: 28rem;
-  overflow: auto;
   border: 1px solid var(--rule);
   border-radius: var(--r);
 }

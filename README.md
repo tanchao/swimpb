@@ -177,17 +177,25 @@ The Focus list is also not a rank; see Rankings below.
 
 ## Rankings
 
-Under Focus, a Rankings panel (closed by default; it makes no request until you
-open it) shows where a swimmer's time stands in the swimmer's club, LSC, zone and
-the US, and a browseable leaderboard for any event, gender, age and season.
+The best-times table has **Team**, **LSC**, **Zone**, and **US** columns. Each
+number is the swimmer's place in that group for that event, this season, at the
+age they were when they swam it. Team and LSC are on by default. Click a number
+to leave the table and open that group's list for that event.
+
+The page is one list. **Team**, the LSC, the zone (Western, for a PN swimmer),
+and **US** are the four groups, and the buttons switch which list you are
+reading. Age and season narrow the same list. ← Times, or the browser's back
+button, returns to the table.
 
 It needs a signed-in session. USA Swimming returns only the **fastest 100
 swimmers** per list, so a rank appears only when the swimmer is in that list.
-Otherwise the card says "Not in the top 100" and shows the 100th time. It never
-guesses. The club rank is counted from clubmates in the list; unattached
-swimmers have none. The zone comes from a table of LSCs built from the server.
-The leaderboard filters on the age at the swim, not the age today. Contract
-details are in `docs/API.md`.
+Otherwise the cell is — and the page says "not in the top 100" and shows the
+100th time. It never guesses. The team rank is counted from teammates in the
+LSC list; an unattached swimmer has no team rank. The zone comes from a table
+of LSCs built from the server. The list filters on the age at the swim, not
+the age today. A list is saved in the browser and shown immediately on the
+next visit, then fetched again after a day and a half. Contract details are in
+`docs/API.md`.
 
 ## Views
 
@@ -312,7 +320,7 @@ app/splits.js                   lap splits: verified normalisation, front/back h
 app/views.js                    report, age-best, meets, splits renderers
 app/rank.js                     rankings logic: request body, zones, standings (pure)
 app/rankings.js                 rankings controller: state, fetching, caching
-app/rankviews.js                rankings panel render
+app/rankviews.js                ranking page render
 app/ui.js                       pure render functions
 app/main.js                     state, URL, event wiring
 tools/build-standards.py        official PDF → motivational.json, once per edition
