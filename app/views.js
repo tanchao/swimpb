@@ -18,7 +18,7 @@ import {
   formatShortDate,
   gapHtml,
   shortMeetName,
-} from "./ui.js?v=9";
+} from "./ui.js?v=13";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const monthYear = (ms) => {

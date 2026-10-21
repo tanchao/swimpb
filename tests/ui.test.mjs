@@ -416,29 +416,105 @@ const enrichedGroups = groupBestTimes(
   ],
 );
 
-check("default columns show Age, Pts, B–AAAA, Meet Cuts, and Date (with Date after cuts)", () => {
+check("a yards swim that the best-times feed has not listed yet is still shown", () => {
+  const groups = groupBestTimes(
+    [{ strokeName: "Individual Medley", distance: 200, courseCode: "LCM", swimTime: "3:39.07", swimDate: "2026-06-13T00:00:00" }],
+    [
+      {
+        eventCode: "200 IM LCM",
+        courseCode: "LCM",
+        swimTime: "3:39.07",
+        swimDate: "2026-06-13T00:00:00",
+        swimmerAge: 9,
+        meetName: "2026 PN IST June Invitational",
+      },
+      {
+        eventCode: "200 IM SCY",
+        courseCode: "SCY",
+        swimTime: "3:11.60",
+        swimDate: "2026-10-17T00:00:00",
+        swimmerAge: 9,
+        meetName: "2026 PN IST Fall Open",
+      },
+      {
+        eventCode: "500 FR SCY",
+        courseCode: "SCY",
+        swimTime: "7:46.22",
+        swimDate: "2026-10-17T00:00:00",
+        swimmerAge: 9,
+        meetName: "2026 PN IST Fall Open",
+      },
+    ],
+  );
+  const im = groups.find((g) => g.stroke === "Individual Medley").rows.find((r) => r.distance === 200);
+  assert.equal(im.actual.SCY.raw, "3:11.60");
+  assert.equal(im.actual.SCY.age, 9);
+  assert.equal(im.actual.LCM.raw, "3:39.07");
+  const free = groups.find((g) => g.stroke === "Freestyle").rows.find((r) => r.distance === 500);
+  assert.equal(free.actual.SCY.raw, "7:46.22");
+});
+
+check("a faster swim in the history replaces a lagging best-times record", () => {
+  const groups = groupBestTimes(
+    [{ strokeName: "Butterfly", distance: 100, courseCode: "SCY", swimTime: "1:35.53", swimDate: "2026-01-24T00:00:00" }],
+    [
+      {
+        eventCode: "100 FL SCY",
+        courseCode: "SCY",
+        swimTime: "1:35.53",
+        swimDate: "2026-01-24T00:00:00",
+        swimmerAge: 8,
+        powerPoints: 300,
+        meetName: "2026 PN IST January Invitational",
+      },
+      {
+        eventCode: "100 FL SCY",
+        courseCode: "SCY",
+        swimTime: "1:32.06",
+        swimDate: "2026-10-18T00:00:00",
+        swimmerAge: 9,
+        powerPoints: 353,
+        meetName: "2026 PN IST Fall Open",
+      },
+    ],
+  );
+  const cell = groups[0].rows[0].actual.SCY;
+  assert.equal(cell.raw, "1:32.06");
+  assert.equal(cell.age, 9);
+  assert.equal(cell.swimDate, "2026-10-18T00:00:00");
+  assert.equal(cell.meetName, "2026 PN IST Fall Open");
+  assert.equal(cell.powerPoints, 353);
+  assert.equal(cell.swims, 2);
+});
+
+check("default columns show Team, LSC, Age, Pts, B–AAAA, and Meet Cuts", () => {
   const html = bestTimesTable(enrichedGroups, "SCY", { ...STD, regional: REGIONAL_DATA }, DEFAULT_COLS);
-  assert.ok(html.includes("26-09-27"), "expected short swim date");
+  assert.ok(!html.includes("26-09-27"), "date is off by default");
   assert.ok(html.includes(">17<"), "expected age at swim");
   assert.ok(html.includes(">612<"), "expected power points");
   assert.ok(html.includes('class="cut-bar"'), "expected motivational & meet cut progress bars");
   assert.ok(!html.includes("Short Meters"), "only active course column is shown");
   assert.ok(!html.includes("IST Sockeye Sprints"), "meet column off by default");
+  assert.ok(!html.includes('data-toggle-col="zone"'), "zone rank is off by default");
+  assert.ok(!html.includes('data-toggle-col="us"'), "US rank is off by default");
   assert.ok(!html.includes('data-toggle-col="drop"'), "drop column removed");
   assert.ok(!html.includes('data-toggle-col="count"'), "swims count column removed");
   const thead = /<thead>([\s\S]*?)<\/thead>/.exec(html)?.[1] ?? "";
   assert.ok(
-    thead.indexOf('data-toggle-col="age"') < thead.indexOf('data-toggle-col="pts"') &&
+    thead.indexOf('data-toggle-col="team"') < thead.indexOf('data-toggle-col="lsc"') &&
+      thead.indexOf('data-toggle-col="lsc"') < thead.indexOf('data-toggle-col="age"') &&
+      thead.indexOf('data-toggle-col="age"') < thead.indexOf('data-toggle-col="pts"') &&
       thead.indexOf('data-toggle-col="pts"') < thead.indexOf('data-toggle-col="mot"') &&
       thead.indexOf('data-toggle-col="mot"') < thead.indexOf('data-toggle-col="meets"') &&
-      thead.indexOf("Champs") < thead.indexOf('data-toggle-col="date"'),
-    "Date must sit after Meet Cuts",
+      !thead.includes('data-toggle-col="date"'),
+    "Team and LSC sit before Age, and Date is off",
   );
 });
 
-check("enabling Meet places it right after Date at the end of the table", () => {
-  const allOn = { ...DEFAULT_COLS, meet: true };
+check("Date sits after Meet Cuts and Meet sits after Date when both are on", () => {
+  const allOn = { ...DEFAULT_COLS, date: true, meet: true };
   const html = bestTimesTable(enrichedGroups, "SCY", { ...STD, regional: REGIONAL_DATA }, allOn);
+  assert.ok(html.includes("26-09-27"), "expected short swim date");
   assert.ok(html.includes("IST Sockeye Sprints"), "expected shortened meet name");
   const thead = /<thead>([\s\S]*?)<\/thead>/.exec(html)?.[1] ?? "";
   assert.ok(
@@ -453,14 +529,18 @@ check("toggling columns off excludes them from the table", () => {
   const html = bestTimesTable(enrichedGroups, "SCY", { ...STD, regional: REGIONAL_DATA }, cols);
   assert.ok(!html.includes('data-toggle-col="mot"'), "motivational cut columns should be hidden");
   assert.ok(!html.includes('data-toggle-col="meets"'), "meet cut columns should be hidden");
-  assert.ok(html.includes("26-09-27"), "date column remains visible");
+  assert.ok(!html.includes("26-09-27"), "date stays off by default");
 });
 
 check("column toggle bar matches table order andstandardsBar includes course toggle", () => {
   const html = columnToggleBar(DEFAULT_COLS);
   const keys = [...html.matchAll(/data-toggle-col="(\w+)"/g)].map((m) => m[1]);
-  assert.deepEqual(keys, ["age", "pts", "mot", "meets", "date", "meet"]);
-  assert.match(html, /class="col-pill on"[^>]*data-toggle-col="date"/);
+  assert.deepEqual(keys, ["team", "lsc", "zone", "us", "age", "pts", "mot", "meets", "date", "meet"]);
+  assert.match(html, /class="col-pill on"[^>]*data-toggle-col="team"/);
+  assert.match(html, /class="col-pill on"[^>]*data-toggle-col="lsc"/);
+  assert.match(html, /class="col-pill off"[^>]*data-toggle-col="zone"/);
+  assert.match(html, /class="col-pill off"[^>]*data-toggle-col="us"/);
+  assert.match(html, /class="col-pill off"[^>]*data-toggle-col="date"/);
   assert.match(html, /class="col-pill off"[^>]*data-toggle-col="meet"/);
 
   const stdHtml = standardsBar({
@@ -474,6 +554,44 @@ check("column toggle bar matches table order andstandardsBar includes course tog
     cols: DEFAULT_COLS,
   });
   assert.match(stdHtml, /class="course-btn on"[^>]*data-course="LCM"/, "course toggle in standardsBar highlights LCM");
+});
+
+check("team and LSC ranks sit next to the time and open that event", () => {
+  const html = bestTimesTable(
+    enrichedGroups,
+    "SCY",
+    { ...STD, regional: REGIONAL_DATA },
+    DEFAULT_COLS,
+    null,
+    {
+      "Freestyle|50": {
+        team: { text: "2", title: "IST #2 of 9", scope: "club", kind: "rank" },
+        lsc: { text: "16", title: "PN #16", scope: "lsc", kind: "rank" },
+      },
+    },
+  );
+  const thead = /<thead>([\s\S]*?)<\/thead>/.exec(html)?.[1] ?? "";
+  assert.ok(
+    thead.indexOf('data-toggle-col="team"') !== -1 &&
+      thead.indexOf('data-toggle-col="team"') < thead.indexOf('data-toggle-col="lsc"') &&
+      thead.indexOf('data-toggle-col="lsc"') < thead.indexOf('data-toggle-col="age"'),
+    "Team and LSC sit immediately after the time",
+  );
+  assert.match(html, /data-rank-col="team"[^>]*>2</);
+  assert.match(html, /data-rank-col="lsc"[^>]*>16</);
+  assert.match(html, /data-rank-cell="Freestyle\|50"/);
+  assert.match(html, /data-rank-scope="club"/);
+  assert.match(html, /data-rank-scope="lsc"/);
+  const hidden = bestTimesTable(enrichedGroups, "SCY", null, {
+    ...DEFAULT_COLS,
+    team: false,
+    lsc: false,
+  });
+  assert.ok(!hidden.includes("data-rank-open"), "the columns can be turned off");
+
+  const extra = bestTimesTable(enrichedGroups, "SCY", null, { ...DEFAULT_COLS, zone: true, us: true });
+  assert.match(extra, /data-toggle-col="zone"/);
+  assert.match(extra, /data-toggle-col="us"/);
 });
 
 check("inferGender detects gender from official timeStandard labels", () => {

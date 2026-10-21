@@ -17,7 +17,7 @@ import {
   setSession,
   swimDetail,
   topTimes,
-} from "./api.js?v=5";
+} from "./api.js?v=6";
 import * as cache from "./cache.js";
 import { COURSES } from "./convert.js";
 import { ageBest, meetsByDate } from "./history.js";
@@ -26,7 +26,7 @@ import { createRankings } from "./rankings.js";
 import { halves, normalizeSplits } from "./splits.js";
 import { loadRegionalStandards } from "./regional.js";
 import { ageGroupFor, loadStandards } from "./standards.js";
-import * as ui from "./ui.js?v=9";
+import * as ui from "./ui.js?v=13";
 import * as views from "./views.js?v=9";
 
 const el = (id) => document.getElementById(id);
@@ -34,7 +34,7 @@ const el = (id) => document.getElementById(id);
 const state = {
   course: cache.pref("course", "SCY"),
   currentOnly: cache.pref("currentOnly", true),
-  cols: { ...ui.DEFAULT_COLS, ...cache.pref("cols:v3", {}) },
+  cols: { ...ui.DEFAULT_COLS, ...cache.pref("cols:v4", {}) },
   swimmer: null,
   bestRecords: [],
   allRecords: [],
@@ -44,6 +44,9 @@ const state = {
   meetOrder: cache.pref("meetOrder", "newest"),
   // The event whose progress report is open: {stroke, distance}, or null.
   open: null,
+  // The ranking page, or null while the board is showing.
+  // {stroke, distance, scope:"club"|"lsc"|"zone"}
+  rank: null,
   // Lap splits, fetched on demand, one entry per swim id:
   // {status:"loading"} | {status:"ready", detail} | {status:"error", message}.
   splits: new Map(),
@@ -58,6 +61,7 @@ const state = {
   needsSession: false,
   sessionBusy: false,
   sessionError: "",
+  serverSession: false,
 };
 
 /** The age group in force: an explicit override, else derived from the age. */
@@ -94,7 +98,7 @@ function renderCourse() {
 
 function renderSession() {
   el("session").innerHTML = ui.sessionBar({
-    signedIn: Boolean(session()),
+    signedIn: Boolean(session()) || state.serverSession,
     needsSession: state.needsSession,
     busy: state.sessionBusy,
     error: state.sessionError,
@@ -105,6 +109,7 @@ function renderSession() {
 function noteApiError(err, fallback) {
   const needs = err instanceof ApiError && err.needsSession;
   if (needs) {
+    state.serverSession = false;
     state.needsSession = true;
     renderSession();
   }
@@ -121,9 +126,38 @@ const rankings = createRankings({
     ageGroup: ageGroup(),
     course: state.course,
     groups: state.groups,
+    ranks: {
+      team: state.view === "best" && Boolean(state.cols.team),
+      lsc: state.view === "best" && Boolean(state.cols.lsc),
+      zone: state.view === "best" && Boolean(state.cols.zone),
+      us: state.view === "best" && Boolean(state.cols.us),
+    },
   }),
+  onBoard: paintRankCells,
+  onNavigate: (action) => {
+    if (action.type === "close") closeRank({ alreadyClosed: true });
+    else if (action.type === "scope") rememberRankScope(action.scope);
+  },
   onError: (err) => noteApiError(err, "Could not load rankings."),
 });
+
+function paintRankCells(cells) {
+  if (!cells) return;
+  for (const btn of el("times").querySelectorAll("[data-rank-cell]")) {
+    const c = cells[btn.dataset.rankCell]?.[btn.dataset.rankCol];
+    if (!c) continue;
+    if (btn.textContent !== c.text) btn.textContent = c.text;
+    btn.title = c.title;
+    btn.dataset.rankScope = c.scope;
+    for (const kind of ["rank", "miss", "wait", "error"]) btn.classList.toggle(kind, c.kind === kind);
+  }
+}
+
+/** Hide the board while the ranking page is up, and bring it back after. */
+function applyRankChrome() {
+  const on = Boolean(state.rank);
+  for (const id of ["views", "times", "advice"]) el(id).hidden = on;
+}
 
 function renderPinned() {
   el("pinned").innerHTML = ui.pinnedBar(cache.pinned(), state.swimmer?.memberId);
@@ -273,11 +307,49 @@ function markOpenRow() {
   renderReport();
 }
 
+/** Re-fetch a swimmer's times at most this often when an event is opened. */
+const EVENT_REFRESH_MS = 30 * 60 * 1000;
+let eventRefresh = null;
+
+/**
+ * Opening an event checks USA Swimming again when the saved times are older
+ * than half an hour. A click sooner than that reuses what is already on screen.
+ */
+function refreshTimesIfOld() {
+  const id = state.swimmer?.memberId;
+  if (!id || (!session() && !state.serverSession) || eventRefresh) return;
+  const times = cache.getEntry(`allTimes:${id}`);
+  const best = cache.getEntry(`bestTimes:${id}`);
+  const oldest = Math.min(times?.fetchedAt ?? 0, best?.fetchedAt ?? 0);
+  if (oldest && Date.now() - oldest < EVENT_REFRESH_MS) return;
+  eventRefresh = Promise.all([allTimes(id), bestTimes(id)])
+    .then(([all, freshBest]) => {
+      if (state.swimmer?.memberId !== id) return;
+      const allSame = JSON.stringify(all ?? []) === JSON.stringify(state.allRecords);
+      const bestSame = JSON.stringify(freshBest ?? []) === JSON.stringify(state.bestRecords);
+      cache.setEntry(`allTimes:${id}`, all ?? []);
+      cache.setEntry(`bestTimes:${id}`, freshBest ?? []);
+      if (allSame && bestSame) return;
+      state.allRecords = all ?? [];
+      state.bestRecords = freshBest ?? [];
+      maybeAutoDetectGender();
+      rebuildGroups();
+      renderStandards();
+      renderTimes();
+      renderSwimmer({ freshness: "Updated with new times from USA Swimming." });
+    })
+    .catch(() => {})
+    .finally(() => {
+      eventRefresh = null;
+    });
+}
+
 /** Open the report for a row, or close it when that row is already open. */
 function toggleReport(stroke, distance, { focus = false } = {}) {
   const same = state.open?.stroke === stroke && state.open?.distance === distance;
   state.open = same ? null : { stroke, distance };
   markOpenRow();
+  if (state.open) refreshTimesIfOld();
   if (focus && state.open) el("report-close")?.focus();
 }
 
@@ -306,7 +378,14 @@ function renderTimes() {
       splits: splitsView(),
     });
   } else {
-    host.innerHTML = ui.bestTimesTable(state.groups, state.course, std, state.cols, state.open);
+    host.innerHTML = ui.bestTimesTable(
+      state.groups,
+      state.course,
+      std,
+      state.cols,
+      state.open,
+      rankings.boardCells(),
+    );
   }
   renderedView = state.view;
   const wrap = host.querySelector(".pb-wrap");
@@ -402,7 +481,75 @@ async function doSearch(name) {
   }
 }
 
+function rankFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const raw = params.get("rank");
+  if (!raw) return null;
+  const cut = raw.lastIndexOf(":");
+  if (cut <= 0) return null;
+  const distance = Number(raw.slice(cut + 1));
+  if (!Number.isFinite(distance)) return null;
+  const scope = params.get("scope");
+  return {
+    stroke: raw.slice(0, cut),
+    distance,
+    scope: scope === "lsc" || scope === "zone" || scope === "us" ? scope : "club",
+  };
+}
+
+/**
+ * @param {"push"|"replace"|"none"} historyMode
+ */
+function openRank(stroke, distance, scope = "club", { historyMode = "push" } = {}) {
+  state.rank = { stroke, distance, scope };
+  if (state.open) {
+    state.open = null;
+    el("report").hidden = true;
+  }
+  applyRankChrome();
+  const url = new URL(location.href);
+  url.searchParams.set("rank", `${stroke}:${distance}`);
+  url.searchParams.set("scope", scope);
+  if (historyMode === "push") history.pushState({ rank: "pushed" }, "", url);
+  else if (historyMode === "replace") history.replaceState({ rank: "replaced" }, "", url);
+  rankings.act({ type: "open", stroke, distance, scope });
+}
+
+function closeRank({ fromPop = false, alreadyClosed = false } = {}) {
+  const was = state.rank;
+  state.rank = null;
+  applyRankChrome();
+  if (!alreadyClosed) rankings.act({ type: "close" });
+  if (fromPop) return;
+  // Only a click from the table pushed an entry. A direct link replaced the
+  // current one, so Back must not leave the app.
+  if (was && history.state?.rank === "pushed") {
+    history.back();
+    return;
+  }
+  const url = new URL(location.href);
+  if (url.searchParams.has("rank")) {
+    url.searchParams.delete("rank");
+    url.searchParams.delete("scope");
+    history.replaceState(null, "", url);
+  }
+}
+
+function rememberRankScope(scope) {
+  if (!state.rank) return;
+  state.rank = { ...state.rank, scope };
+  const url = new URL(location.href);
+  url.searchParams.set("scope", scope);
+  const mark = history.state?.rank === "pushed" ? "pushed" : "replaced";
+  history.replaceState({ rank: mark }, "", url);
+}
+
 async function selectSwimmer(swimmer) {
+  if (state.rank && state.swimmer && state.swimmer.memberId !== swimmer.memberId) {
+    state.rank = null;
+    applyRankChrome();
+    rankings.act({ type: "close" });
+  }
   state.swimmer = swimmer;
   // Also runs after a sign-in, so a leaderboard that failed with 401 is retried.
   rankings.retryErrors();
@@ -442,7 +589,12 @@ async function selectSwimmer(swimmer) {
 
   const url = new URL(location.href);
   url.searchParams.set("m", swimmer.memberId);
-  history.replaceState(null, "", url);
+  if (!state.rank) {
+    url.searchParams.delete("rank");
+    url.searchParams.delete("scope");
+  }
+  const mark = state.rank ? (history.state?.rank === "pushed" ? "pushed" : "replaced") : null;
+  history.replaceState(mark ? { rank: mark } : null, "", url);
 
   status("Loading personal bests…");
   renderSwimmer({ freshness: "" });
@@ -475,6 +627,7 @@ async function selectSwimmer(swimmer) {
         renderStandards();
         renderTimes();
       },
+      { revalidate: true },
     )
     .then(({ data }) => {
       if (state.swimmer?.memberId !== swimmer.memberId) return;
@@ -498,10 +651,20 @@ async function selectSwimmer(swimmer) {
         rebuildGroups();
         renderSwimmer({ freshness: "Updated with new times from USA Swimming." });
       },
+      {
+        revalidate: true,
+        onUnchanged: () => {
+          if (state.swimmer?.memberId !== swimmer.memberId) return;
+          const hit = cache.getEntry(`bestTimes:${swimmer.memberId}`);
+          if (hit) renderSwimmer({ freshness: freshnessLabel(hit.fetchedAt, true) });
+        },
+      },
     );
     state.bestRecords = data ?? [];
+    if (!session()) state.serverSession = true;
     rebuildGroups();
     status("");
+    renderSession();
     renderSwimmer({ freshness: freshnessLabel(fetchedAt, fromCache) });
   } catch (err) {
     // If we have any cached copy at all, showing it beats showing an error.
@@ -532,7 +695,7 @@ function setCourse(course) {
 function toggleColumn(colKey) {
   if (!(colKey in state.cols)) return;
   state.cols = { ...state.cols, [colKey]: !state.cols[colKey] };
-  cache.setPref("cols:v3", state.cols);
+  cache.setPref("cols:v4", state.cols);
   renderStandards();
   renderTimes();
 }
@@ -621,6 +784,7 @@ el("session").addEventListener("submit", async (e) => {
 el("session").addEventListener("click", (e) => {
   if (!e.target.closest("#session-clear")) return;
   clearSession();
+  state.serverSession = false;
   state.needsSession = false;
   state.sessionError = "";
   renderSession();
@@ -685,8 +849,19 @@ el("times").addEventListener("click", (e) => {
     setCourse(courseTh.dataset.course);
     return;
   }
+  const rankBtn = e.target.closest("[data-rank-open]");
+  if (rankBtn) {
+    openRank(rankBtn.dataset.stroke, Number(rankBtn.dataset.distance), rankBtn.dataset.rankScope || "club");
+    return;
+  }
   const evRow = e.target.closest("tr.ev-row");
   if (evRow) toggleReport(evRow.dataset.stroke, Number(evRow.dataset.distance));
+});
+
+window.addEventListener("storage", (e) => {
+  if (e.key !== "swimpb:session") return;
+  renderSession();
+  if (e.newValue && state.swimmer && !state.bestRecords.length) selectSwimmer(state.swimmer);
 });
 
 el("report").addEventListener("click", (e) => {
@@ -725,7 +900,8 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (e.key === "Escape") {
-    closeReport();
+    if (state.rank) closeRank();
+    else closeReport();
     return;
   }
   if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("tr.ev-row")) {
@@ -765,8 +941,19 @@ function boot() {
       cache.pinned().find((s) => s.memberId === id) ?? { memberId: id })
     : cache.pinned()[0];
 
-  if (target) selectSwimmer(target);
-  else el("q").focus();
+  if (target) {
+    const pending = rankFromUrl();
+    if (pending) state.rank = pending;
+    selectSwimmer(target);
+    if (pending) openRank(pending.stroke, pending.distance, pending.scope, { historyMode: "none" });
+  } else el("q").focus();
 }
+
+window.addEventListener("popstate", () => {
+  if (!state.swimmer) return;
+  const pending = rankFromUrl();
+  if (pending) openRank(pending.stroke, pending.distance, pending.scope, { historyMode: "none" });
+  else if (state.rank) closeRank({ fromPop: true });
+});
 
 boot();

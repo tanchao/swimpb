@@ -39,16 +39,21 @@ function deviceId() {
 // `bff_auth_session` and pass it to the local `serve.py` proxy in `X-Bff-Session`,
 // which forwards it upstream as a Cookie header.
 //
-// Kept in sessionStorage, never localStorage: a session cookie grants access
-// to the account's view of the data, so it dies with the tab rather than
-// sitting on disk.
+// Kept in localStorage so a second tab of this browser is signed in too.
+// sessionStorage is per tab, which is why a new tab used to ask for a login
+// the first tab already had. Sign out clears it.
 
 const SESSION_KEY = "swimpb:session";
 
 /** @returns {{bffSession:string}|null} */
 export function session() {
   try {
-    const raw = sessionStorage.getItem(SESSION_KEY);
+    let raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) {
+      // A tab that signed in before this was shared still has it here.
+      raw = sessionStorage.getItem(SESSION_KEY);
+      if (raw) localStorage.setItem(SESSION_KEY, raw);
+    }
     const s = raw ? JSON.parse(raw) : null;
     return typeof s?.bffSession === "string" && s.bffSession ? { bffSession: s.bffSession } : null;
   } catch {
@@ -58,6 +63,7 @@ export function session() {
 
 export function clearSession() {
   try {
+    localStorage.removeItem(SESSION_KEY);
     sessionStorage.removeItem(SESSION_KEY);
   } catch {
     // Nothing to do — an unwritable store just means no session.
@@ -145,7 +151,8 @@ export function setSession(text) {
   const parsed = parseSession(text);
   if (!parsed) return false;
   try {
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify(parsed));
+    localStorage.setItem(SESSION_KEY, JSON.stringify(parsed));
+    sessionStorage.removeItem(SESSION_KEY);
   } catch {
     return false;
   }
